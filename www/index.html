@@ -427,16 +427,26 @@ function parseCSV(lines, ctx){
   const col = (...ks) => header.findIndex(h => ks.some(k => h.indexOf(k) > -1));
   const iT = col('交易时间','创建时间','付款时间','最近修改时间','时间'),
         iA = col('金额'), iD = col('收/支','收支','资金状态'),
-        iN = col('商品说明','商品名称','商品','交易对方','对方','备注'), iY = col('交易类型','类型');
+        iN = col('交易对方','对方','商户','备注'), iG = col('商品说明','商品名称','商品'),
+        iY = col('交易类型','类型'), iS = col('当前状态','交易状态','状态');
   const items = [], failed = [];
   for (let i = hi + 1; i < lines.length; i++){
     const c = splitRow(lines[i]);
     if (c.length < 2) continue;
-    const num = parseFloat(String(iA > -1 ? c[iA] : '').replace(/[^\d.]/g,'')) || 0;
+    const amtCell = iA > -1 ? String(c[iA] || '').trim() : '';
+    if (!amtCell) continue;   // 官方账单的合计行 / 空行：直接跳过，不计入「未识别」
+    const num = parseFloat(amtCell.replace(/[^\d.]/g,'')) || 0;
     if (!num) { if (String(lines[i]).trim()) failed.push(String(lines[i]).trim()); continue; }
-    const dr = iD > -1 ? String(c[iD] || '') : '';
+    const dr = iD > -1 ? String(c[iD] || '').trim() : '';
+    if (dr === '/' || dr.indexOf('不计') > -1) continue;   // 不计收支（提现、零钱通转入等）不入账
+    const st = iS > -1 ? String(c[iS] || '') : '';
+    if (dr.indexOf('收入') < 0 && dr.indexOf('入') !== 0 && /退款|已关闭|交易关闭|失败|未付款|待付款|已撤销/.test(st)) continue;
     const type = (dr.indexOf('收入') > -1 || dr.indexOf('入') === 0) ? 'income' : 'expense';
-    const np = []; if (iN > -1 && c[iN]) np.push(c[iN]); if (iY > -1 && c[iY]) np.push(c[iY]);
+    const vN = iN > -1 ? smsTidy(c[iN] || '') : '';
+    const vG = iG > -1 ? smsTidy(c[iG] || '') : '';
+    const np = []; if (vN) np.push(vN);
+    if (vG && vG !== vN) np.push(vG);
+    if (iY > -1 && c[iY] && np.length < 2) np.push(c[iY]);
     const note = extractNote(np.join(' ')) || fbNote(type);
     const raw = iT > -1 ? String(c[iT] || '') : '';
     const dm = raw.match(/(\d{4})\D(\d{1,2})\D(\d{1,2})/);
@@ -458,7 +468,19 @@ function parseText(text){
   if (csv && csv.items.length){ items = csv.items; failed = csv.failed; }
   else {
     items = []; failed = [];
-    lines.forEach(l => { const s = l.trim(); if (!s) return; const one = parseLine(s, ctx); if (one) items.push(one); else if (s.length > 6 && /[\u4e00-\u9fa5]/.test(s)) failed.push(s); });
+    lines.forEach(l => {
+      const s = l.trim(); if (!s) return;
+      /* 银行 / 支付短信：走专项解析（自动排除余额数字、抽取商户、识别「摘要」用途） */
+      if (looksLikeSms(s)) {
+        const bs = parseBankSms({ body: s });
+        if (bs) {
+          items.push({ type: bs.type, amount: bs.amount, note: bs.note, date: bs.date, time: bs.time,
+            dateGuessed: bs.dateGuessed, category: bs.category });
+          return;
+        }
+      }
+      const one = parseLine(s, ctx); if (one) items.push(one); else if (s.length > 6 && /[\u4e00-\u9fa5]/.test(s)) failed.push(s);
+    });
   }
   let e = 0, i = 0; items.forEach(x => x.type === 'income' ? i += x.amount : e += x.amount);
   const ds = items.map(x => x.date).sort();
@@ -703,7 +725,7 @@ function renderIndex(){
       <div class="tap" onclick="openRecurring()"><span style="font-size:19px">🔁</span>
         <div><div class="t">周期自动记账</div><div class="s">房租·房贷·会员·工资，到期自动入账</div></div></div>
       <div class="tap" onclick="openImport()"><span style="font-size:19px">📋</span>
-        <div><div class="t">账单批量导入</div><div class="s">粘贴账单文本，自动拆分归类</div></div></div>
+        <div><div class="t">账单批量导入</div><div class="s">短信 / 微信 / 支付宝账单，粘贴即导入</div></div></div>
     </div>
 
     <div class="panel">
@@ -1139,11 +1161,11 @@ function renderMine(){
     <div class="card">
       <div class="mi tap" onclick="about()">
         <div class="ic" style="background:#F4F5F9">ℹ️</div>
-        <div class="bd"><div class="t">自动记账原理说明</div><div class="s">iOS 为什么读不到短信？我们如何解决</div></div>
+        <div class="bd"><div class="t">自动记账原理说明</div><div class="s">读不到短信和微信明细？数据这样进来</div></div>
         <span class="ar">›</span>
       </div>
       <div class="mi"><div class="ic" style="background:#F4F5F9">🏷️</div>
-        <div class="bd"><div class="t">版本</div></div><span class="val">v1.1.0</span></div>
+        <div class="bd"><div class="t">版本</div></div><span class="val">v1.2.0</span></div>
     </div>
     <div style="text-align:center;font-size:10.5px;color:#B9BFCC;padding:22px 0 6px">所有数据仅保存在本机，不会上传任何服务器</div>
   </div>`;
@@ -1198,11 +1220,11 @@ function about(){
     <div class="sh-b">
       <div class="note" style="padding-top:4px;color:var(--text);font-size:13px">
         <b>iOS 为什么读不到短信和支付通知？</b><br>
-        苹果的沙箱机制不允许任何第三方 App 读取系统短信、通话记录和其他 App 的通知——这不是本应用没做，而是所有 App 都做不到。<br><br>
+        苹果的沙箱机制不允许任何第三方 App 读取短信收件箱、通话记录，也不允许读取其他 App 的通知与聊天数据。所以本应用读不到银行短信、也读不到微信支付明细——这不是本应用没做，而是 iOS 上没有任何 App 做得到。<br><br>
         <b>那"自动记账"怎么实现？</b><br>
         1. <b>备注智能归类</b>：输入「星巴克」自动归入餐饮，输入「滴滴」自动归入交通，不用手动选分类。<br>
         2. <b>周期自动记账</b>：房租、房贷、会员订阅、工资这类固定收支，设定一次，之后每到账期自动生成账单，完全不用管。<br>
-        3. <b>账单批量导入</b>：从微信 / 支付宝 / 银行 App 复制账单文本粘贴进来，自动拆分出日期、金额、收支方向和商家，并自动归类，一次导入几十笔。<br>
+        3. <b>账单批量导入</b>：在「信息」里长按复制银行消费短信，或在微信「我 → 服务 → 钱包 → 账单 → 右上角常见问题 → 下载账单 → 用于个人对账」导出官方账单，粘贴进来即自动拆分日期、金额、收支方向和商家并归类。识别官方账单时会自动跳过提现等「不计收支」行与已退款 / 已关闭的交易，一次导入几十笔。<br>
         4. <b>常用模板一键记</b>：系统会记住你高频的记账组合，首页点一下即可入账。<br><br>
         <b>数据安全</b><br>
         数据默认只存在你自己的手机上。接上云开发后，同步到你自己账号的云数据库中，不经过任何第三方服务器。
@@ -1360,7 +1382,7 @@ function openImport(){
       <div class="sh-b" style="padding-bottom:${items && items.length ? '86px' : '16px'}">
         <div class="hint g" style="margin-bottom:12px"><span>📋</span><div>
           <b>粘贴账单文本，自动拆分归类</b>
-          支持微信支付、支付宝、银行短信、官方导出 CSV，自动识别日期、金额、收支方向和商家。</div></div>
+          支持银行消费短信、微信 / 支付宝官方账单 CSV、支付记录文字，自动识别日期、金额、收支方向和商家。<br>iOS 读不到短信与微信明细，请这样取数据：银行短信在「信息」中长按复制；微信账单在「我 → 服务 → 钱包 → 账单 → 右上角常见问题 → 下载账单 → 用于个人对账」导出，粘贴到下面即可。</div></div>
         <textarea class="ta" id="impText" placeholder="在这里粘贴账单文本，例如：&#10;2026-10-08 12:30:15  微信支付  沙县小吃  -¥15.00  已支付" oninput="S.importText=this.value">${esc(S.importText)}</textarea>
         <div style="display:flex;gap:8px;margin-top:10px">
           <div class="btn btn-l" style="flex:1;height:38px;font-size:13px" onclick="pasteTo('impText')">粘贴</div>
@@ -1539,6 +1561,133 @@ function render(){
     if (HB) window.haptic = function(){ try { HB.impact({ style: 'LIGHT' }); } catch(e){} };
   } catch(e){}
 })();
+/* ---------------------- 18. 银行 / 支付短信文本解析（iOS 版） ----------------------
+   由 scripts/sync-from-preview.js 注入到正式版 www/index.html。
+
+   iOS 的沙箱不允许任何 App 读取短信收件箱，因此本模块不做任何系统读取、
+   不申请任何权限，只负责一件事：把你从「信息」里复制粘贴进来的银行消费短信
+   解析成账单草稿，交给「批量导入账单」的去重与入账流程。
+
+   与 Android 版的原生短信自动入账共用同一套解析口径（那一版多了系统读取能力），
+   两边改动需同步：
+     - 先剔除「余额 / 可用额度 / 剩余」后面的数字，否则会把余额当成消费额；
+     - 商户从「在星巴克消费」这类句式里抽，抽不到退而取「摘要 / 备注 / 用途」；
+     - 验证码、纯余额提醒、营销短信、登录通知一律丢弃（宁漏不错）；
+     - 粘贴文本没有短信时间戳，日期时间从正文里抽，抽不到才退回当天。
+   ------------------------------------------------------------------------------ */
+
+var SMS_NOISE = /(验证码|校验码|动态密码|动态码|密码|登录|注册|注销|解绑|挂失|积分|优惠券|优惠|活动|促销|问卷|邀请|即将|到期|逾期|账单已出|最低还款|额度提升|领取|点击|退订|拒收|回复TD)/;
+var SMS_EXP = /(消费|支出|扣款|扣费|代扣|取现|转出|付款|支付)/;
+var SMS_INC = /(工资|薪资|代发|收入|存入|转入|入账|到账|汇入|退款|退回|利息|分红|返现|收款)/;
+var SMS_SURE_INC = /(退款|退回|工资|薪|入账|到账|收入|存入|转入|代发|利息|分红|返现)/;
+
+/* 商户名清洗：去掉括号后缀与公司后缀（「瑞幸咖啡(北京)有限公司」→「瑞幸咖啡」） */
+function smsTidy(s){
+  return String(s == null ? '' : s)
+    .replace(/[（(][^）)]*[）)]/g, ' ')
+    .replace(/(股份有限公司|有限责任公司|有限公司|科技有限公司|信息技术|网络科技|公司|集团|分公司|总部)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/* 粘贴文本没有短信自带的时间戳，从正文里抽日期时间；exact 表示日期是否来自正文 */
+function smsTextDate(body){
+  var s = String(body || '').replace(/\s+/g, '');
+  var now = new Date();
+  var t = s.match(/(\d{1,2}):(\d{2})/);
+  var hh = t ? pad(+t[1]) : '12', mi = t ? t[2] : '00';
+  var m = s.match(/(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})/);
+  if (m) return { y: +m[1], m: +m[2], d: +m[3], hh: hh, mi: mi, exact: true };
+  m = s.match(/(\d{1,2})[月/-](\d{1,2})日/);
+  if (m) return { y: now.getFullYear(), m: +m[1], d: +m[2], hh: hh, mi: mi, exact: true };
+  return { y: now.getFullYear(), m: now.getMonth() + 1, d: now.getDate(), hh: hh, mi: mi, exact: false };
+}
+
+/* 单条银行 / 支付短信 → 账单草稿；识别不了返回 null */
+function parseBankSms(m){
+  var body = String((m && m.body) || '');
+  if (!body) return null;
+  if (SMS_NOISE.test(body)) return null;
+
+  var compact = body.replace(/\s+/g, '');
+  var isExp = SMS_EXP.test(compact), isInc = SMS_INC.test(compact);
+  if (!isExp && !isInc) return null;
+
+  /* 先剔除「余额 / 可用额度 / 剩余」后的数字，否则会把余额当成消费金额 */
+  var cleaned = compact.replace(
+    /(余额|剩余|可用额度|额度|欠款|应还|积分|里程)[^\d]{0,4}\d+(?:,\d{3})*(?:\.\d{1,2})?/g,
+    ' '
+  );
+
+  var re = /(?:人民币|RMB|¥|￥)?(\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*元/g;
+  var ams = [], k;
+  while ((k = re.exec(cleaned)) !== null) {
+    ams.push({ v: parseFloat(k[1].replace(/,/g, '')), i: k.index });
+  }
+  if (!ams.length) {
+    /* 少数短信不写「元」，就近抓收支动词后的数字 */
+    var m2 = cleaned.match(/(?:消费|支出|扣款|扣费|支付|取现|转出|收入|入账|到账|转入)(?:人民币|RMB|¥|￥)?(\d+(?:,\d{3})*\.\d{1,2})/);
+    if (!m2) return null;
+    ams.push({ v: parseFloat(m2[1].replace(/,/g, '')), i: 0 });
+  }
+
+  var type = (!isExp && isInc) ? 'income'
+    : (isExp && !isInc) ? 'expense'
+    : (SMS_SURE_INC.test(cleaned) ? 'income' : 'expense');
+
+  /* 金额取「收支动词之后」最近的一个，取不到退回首尾 */
+  var kwAt = type === 'expense' ? cleaned.search(SMS_EXP) : cleaned.search(SMS_INC);
+  var pick = ams[0];
+  if (kwAt > -1) {
+    var after = ams.filter(function (a) { return a.i > kwAt; });
+    pick = after.length ? after[0] : ams[ams.length - 1];
+  }
+  var amount = Math.round(pick.v * 100) / 100;
+  if (!amount || amount <= 0 || amount > 500000) return null;
+
+  /* 商户名 */
+  var merchant = '';
+  var pats = [
+    /在([\u4e00-\u9fa5A-Za-z0-9·&()（）\-]{2,18}?)(?:消费|支出|扣款|扣费|支付|付款|取现|转出)/,
+    /(?:商户名称|特约商户|商户|收款方|交易对方)[:：]?([\u4e00-\u9fa5A-Za-z0-9·&()（）\-]{2,18})/,
+    /(?:向|于)([\u4e00-\u9fa5A-Za-z0-9·&()（）\-]{2,18}?)(?:消费|支付|付款|转账)/
+  ];
+  for (var pi = 0; pi < pats.length && !merchant; pi++) {
+    var mr = cleaned.match(pats[pi]);
+    if (mr && mr[1]) merchant = mr[1];
+  }
+
+  var bank = (body.match(/([\u4e00-\u9fa5]{2,6}银行)/) || [])[1] || '';
+  var tail = (body.match(/尾号\s*(\d{3,4})/) || [])[1] || '';
+
+  /* 银行短信常把用途写在「摘要 / 备注 / 用途」里，作为商户的兜底 */
+  var brief = (compact.match(/(?:摘要|备注|用途|附言)[:：]?([\u4e00-\u9fa5A-Za-z0-9·]{2,12})/) || [])[1] || '';
+  if (!merchant && brief) merchant = brief;
+  if (merchant) merchant = smsTidy(merchant);
+
+  var note = merchant ? (extractNote(merchant) || merchant) : (extractNote(cleaned) || '');
+  if (!note) note = (bank ? bank.replace(/银行$/, '') + ' ' : '') + fbNote(type);
+
+  var inf = infer(note, type) || infer(cleaned, type);
+  var dt = smsTextDate(body);
+  var d = (m && m.date) ? new Date(Number(m.date)) : new Date(dt.y, dt.m - 1, dt.d);
+  var time = (m && m.date) ? tstr(d) : (dt.hh + ':' + dt.mi);
+
+  return {
+    smsId: String((m && m.id) || (Number(m && m.date) || '') + '|' + body.slice(0, 24)),
+    type: type, amount: amount, note: note.slice(0, 20), bank: bank, tail: tail,
+    date: dstr(d), time: time, dateGuessed: (m && m.date) ? false : !dt.exact,
+    category: (inf && inf.type === type) ? inf.key : 'qita',
+    raw: body.slice(0, 90),
+    checked: true
+  };
+}
+
+/* 判断一段文本像不像银行 / 支付短信：避免把普通账单行交给短信解析器 */
+function looksLikeSms(s){
+  return /(【|】|尾号|银行|信用卡|储蓄卡|借记卡|人民币)/.test(String(s || ''));
+}
+
 </script>
 </body>
 </html>
