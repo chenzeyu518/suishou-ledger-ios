@@ -35,17 +35,19 @@ ledger-ios/
 ├── native/www/sms-parse.js     # 银行 / 支付短信文本解析（粘贴导入用，随 www 一起注入）
 ├── native/www/store-module.js  # 存储加固层：四副本互备 + 自愈 + 存储诊断（与 Android 同一份）
 ├── native/www/ux-module.js     # 交互补充层：长按删除 / 删除确认 / 金额清空（与 Android 同一份）
+├── native/www/ocr-module.js    # 拍票识别：发票 / 小票文本 → 金额·日期·商户·分类（与 Android 同一份）
 ├── native/ios/LedgerVaultPlugin.swift  # 钥匙串保险柜原生插件（CI 注入到 iOS 工程）
+├── native/ios/LedgerOCRPlugin.swift    # 拍票识别原生插件：系统 Vision 离线识别中文（CI 注入）
 ├── assets/                     # 应用图标 + 启动图（scripts/make-assets.py 生成）
 ├── capacitor.config.json       # App ID: com.suishou.ledger
 ├── package.json                # Capacitor 6 依赖
 ├── scripts/
 │   ├── build-ipa.sh            # Mac 本地一键构建签名 IPA
-│   ├── patch-ios-plist.sh      # 配置 Info.plist（显示名/浅色界面/竖屏/状态栏/文件共享）
+│   ├── patch-ios-plist.sh      # 配置 Info.plist（显示名/浅色界面/竖屏/状态栏/文件共享/相机与相册用途）
 │   ├── make-assets.py          # 重新生成图标与启动图（纯标准库，可自定义配色）
-│   ├── sync-from-preview.js    # 从 H5 预览页同步生成正式版 www/index.html（25 项补丁，逐项断言）
-│   ├── inject-ios-vault.js     # 把钥匙串插件注入原生工程并登记注册（构建期执行）
-│   └── test-www.js             # 冒烟测试（56 项断言 + 存储副本 / 删除交互 / 重启持久化检查）
+│   ├── sync-from-preview.js    # 从 H5 预览页同步生成正式版 www/index.html（27 项补丁，逐项断言）
+│   ├── inject-ios-plugins.js   # 通用插件注入器：把 native/ios/*.swift 注入工程并登记注册（构建期执行）
+│   └── test-www.js             # 冒烟测试（70 项断言 + 存储副本 / 删除交互 / 拍票识别端到端）
 ├── signing/                    # 签名导出配置模板（ad-hoc / development / app-store）
 └── .github/workflows/ios-ipa.yml   # GitHub Actions 云端构建 → 产出 .ipa（含插件进包校验）
 ```
@@ -76,6 +78,21 @@ ledger-ios/
 
 > **v1.4.0 交互补充**：保存成功的提示延长到 9 秒并可直接删除；长按任意一条记录弹出
 > 「编辑 / 删除」菜单，删除前二次确认；数字键盘 ⌫ 长按一次清空金额。见 `native/www/ux-module.js`。
+
+> **v1.5.0 拍票入账（新）**：首页新增「拍票入账」——拍一张发票或小票，自动读出发票上的
+> 金额、日期、销售方与开票品目，归好类再让你确认入账。
+>
+> - **识别在本机离线完成**，用的是 iOS 系统自带的 Vision（`native/ios/LedgerOCRPlugin.swift`），
+>   照片不出手机、不联网、不申请任何读取其他 App 数据的权限，只声明了相机与相册用途。
+> - 支持**增值税电子普通发票 / 专用发票（含数电票）、纸质发票、小票、超市收据、
+>   火车票、机票行程单、酒店住宿发票**。金额优先取「价税合计（小写）」，其次
+>   应付 / 实付 / 合计 / 总计 / 票价；小票遇到「实收 + 找零」会自动相减。
+> - **分类按发票品目自动判定**：发票上的 `*餐饮服务*`、`*运输服务*`、`*住宿服务*`
+>   这类星号标记是最可靠的信号，识别不到再退回商户名与通用关键词。
+> - 识别结果一律先进**确认卡**（金额 / 收支 / 分类 / 备注 / 日期都能改，并附识别原文
+>   供核对），确认后才入账，不会出现「机器记错还找不到」的情况。
+> - 解析口径由 `native/www/ocr-module.js` 实现，与 Android 版**共用同一份文件、逐字一致**；
+>   原生插件由 `scripts/inject-ios-plugins.js` 注入并在构建时校验进包。
 
 ## 三条路线怎么选
 
