@@ -56,6 +56,9 @@ jobs:
           fi
           bash scripts/patch-ios-plist.sh
 
+      - name: 注入钥匙串保险柜插件（LedgerVault）
+        run: node scripts/inject-ios-vault.js
+
       - name: 生成图标与启动图
         continue-on-error: true
         run: npx @capacitor/assets generate --ios
@@ -94,6 +97,15 @@ jobs:
           zip -qry SuishouLedger-unsigned.ipa Payload
           unzip -l SuishouLedger-unsigned.ipa | head -8
           ls -lh SuishouLedger-unsigned.ipa
+
+      - name: 校验钥匙串插件确实进了包（防止静默失效）
+        if: steps.sign.outputs.signed == 'no'
+        run: |
+          unzip -p build/SuishouLedger-unsigned.ipa Payload/App.app/capacitor.config.json > /tmp/capcfg.json
+          cat /tmp/capcfg.json
+          grep -q LedgerVaultPlugin /tmp/capcfg.json || { echo "::error::钥匙串插件未登记进 capacitor.config.json"; exit 1; }
+          strings "build/dd/Build/Products/Release-iphoneos/App.app/App" | grep -q readVault || { echo "::error::LedgerVaultPlugin 未被编译进二进制"; exit 1; }
+          echo "✓ 钥匙串保险柜（LedgerVault）已打入包并注册"
 
       - name: 上传未签名 IPA
         if: steps.sign.outputs.signed == 'no'
