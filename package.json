@@ -1,6 +1,6 @@
 {
   "name": "suishou-ledger-ios",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
   "description": "随手记账 · iOS 客户端（Capacitor 壳工程，构建产出 .ipa）",
   "scripts": {
