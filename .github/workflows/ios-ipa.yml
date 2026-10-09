@@ -56,8 +56,8 @@ jobs:
           fi
           bash scripts/patch-ios-plist.sh
 
-      - name: 注入钥匙串保险柜插件（LedgerVault）
-        run: node scripts/inject-ios-vault.js
+      - name: 注入原生插件（钥匙串保险柜 LedgerVault / 拍照识别 LedgerOCR）
+        run: node scripts/inject-ios-plugins.js
 
       - name: 生成图标与启动图
         continue-on-error: true
@@ -98,14 +98,20 @@ jobs:
           unzip -l SuishouLedger-unsigned.ipa | head -8
           ls -lh SuishouLedger-unsigned.ipa
 
-      - name: 校验钥匙串插件确实进了包（防止静默失效）
+      - name: 校验原生插件确实进了包（防止静默失效）
         if: steps.sign.outputs.signed == 'no'
         run: |
           unzip -p build/SuishouLedger-unsigned.ipa Payload/App.app/capacitor.config.json > /tmp/capcfg.json
           cat /tmp/capcfg.json
           grep -q LedgerVaultPlugin /tmp/capcfg.json || { echo "::error::钥匙串插件未登记进 capacitor.config.json"; exit 1; }
-          strings "build/dd/Build/Products/Release-iphoneos/App.app/App" | grep -q readVault || { echo "::error::LedgerVaultPlugin 未被编译进二进制"; exit 1; }
-          echo "✓ 钥匙串保险柜（LedgerVault）已打入包并注册"
+          grep -q LedgerOCRPlugin /tmp/capcfg.json || { echo "::error::拍照识别插件未登记进 capacitor.config.json"; exit 1; }
+          BIN="build/dd/Build/Products/Release-iphoneos/App.app/App"
+          strings "$BIN" | grep -q readVault || { echo "::error::LedgerVaultPlugin 未被编译进二进制"; exit 1; }
+          strings "$BIN" | grep -q recognize || { echo "::error::LedgerOCRPlugin 未被编译进二进制"; exit 1; }
+          echo "✓ 钥匙串保险柜（LedgerVault）与拍照识别（LedgerOCR）已打入包并注册"
+          echo "--- Info.plist 相机 / 相册用途说明 ---"
+          /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' build/dd/Build/Products/Release-iphoneos/App.app/Info.plist
+          /usr/libexec/PlistBuddy -c 'Print :NSPhotoLibraryUsageDescription' build/dd/Build/Products/Release-iphoneos/App.app/Info.plist
 
       - name: 上传未签名 IPA
         if: steps.sign.outputs.signed == 'no'
