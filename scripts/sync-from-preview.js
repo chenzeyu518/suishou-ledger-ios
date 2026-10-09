@@ -110,7 +110,7 @@ function doLoadDemo(){
 )
 
 /* ---------------- 6. 版本与页脚文案 ---------------- */
-patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.4.0</span>`)
+patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.5.0</span>`)
 patch(
   'footer',
   `本页为小程序交互预览，数据仅存于本机浏览器`,
@@ -162,6 +162,22 @@ patch(
   'mine-restore-sub',
   `<div class="bd"><div class="t">从剪贴板恢复</div><div class="s">换设备时把备份文本粘贴回来</div></div>`,
   `<div class="bd"><div class="t">备份与恢复</div><div class="s">四份副本 + 快照，卸载重装也能找回</div></div>`
+)
+
+/* ---------------- 6g. 首页：新增「拍票入账」入口（发票 / 小票拍照识别） ----------------
+   插在「周期自动记账 / 账单批量导入」两个入口下方、记账面板上方。
+   锚点选记账面板的 <div class="panel">，它在首页里唯一，且不被前面的补丁改动。 */
+patch(
+  'ocr-entry',
+  `    <div class="panel">
+      <div class="seg">`,
+  `    <div class="auto" style="margin-top:9px">
+      <div class="tap" onclick="openOcr()"><span style="font-size:19px">📷</span>
+        <div><div class="t">拍票入账</div><div class="s">拍发票 / 小票 / 车票，自动识别金额并归类</div></div></div>
+    </div>
+
+    <div class="panel">
+      <div class="seg">`
 )
 
 /* ---------------- 7. 原理说明：贴合 iOS 独立 App 的真实情况 ---------------- */
@@ -223,6 +239,16 @@ const uxCode = fs.readFileSync(uxPath, 'utf8')
 if (/<\/script/i.test(uxCode)) throw new Error('ux-module.js 里出现 </script>，会截断注入')
 patch('ux-module', `</script>\n</body>`, uxCode + `\n</script>\n</body>`)
 
+/* ---------------- 12. 票据拍照识别层（整段注入：发票 / 小票 → 账单草稿） ---------------------
+   与 Android 版**共用同一份文件**，两端内容必须逐字一致（原生 OCR 插件不同，
+   本模块同时探测 LedgerOCR（iOS）与 OcrReader（Android）两个插件名）。
+   必须放在交互层之后注入：它要用 ux-module 包裹过的 render() 与 showUndo()。 */
+const ocrPath = path.join(root, 'native', 'www', 'ocr-module.js')
+if (!fs.existsSync(ocrPath)) throw new Error('缺少 native/www/ocr-module.js')
+const ocrCode = fs.readFileSync(ocrPath, 'utf8')
+if (/<\/script/i.test(ocrCode)) throw new Error('ocr-module.js 里出现 </script>，会截断注入')
+patch('ocr-module', `</script>\n</body>`, ocrCode + `\n</script>\n</body>`)
+
 const out = path.join(root, 'www', 'index.html')
 fs.writeFileSync(out, html)
 
@@ -247,6 +273,13 @@ if (!/storeRenderDiag/.test(html)) throw new Error('自检失败：存储状态�
 if (!/window\.openRowMenu/.test(html) || !/window\.askDelBill/.test(html)) throw new Error('自检失败：长按记录操作菜单缺失')
 if (!/confirmDelBill/.test(html) || !/uxDecorate/.test(html)) throw new Error('自检失败：删除确认或列表提示缺失')
 if (html.indexOf('function storePack') > html.indexOf('function uxOn')) throw new Error('自检失败：存储层必须在交互层之前注入')
+if (!/function parseInvoiceText/.test(html)) throw new Error('自检失败：票据解析模块未注入')
+if (!/function openOcr/.test(html)) throw new Error('自检失败：拍票入账逻辑未注入')
+if (!/onclick="openOcr\(\)"/.test(html)) throw new Error('自检失败：首页「拍票入账」入口缺失')
+if (!/LedgerOCR/.test(html) || !/OcrReader/.test(html)) throw new Error('自检失败：原生 OCR 插件探测缺失')
+if (!/parseInvoiceText\(text\)/.test(html)) throw new Error('自检失败：识别结果未接入票据解析')
+if (!/source: 'ocr'/.test(html)) throw new Error('自检失败：入账未标记拍照来源')
+if (html.indexOf('function parseInvoiceText') < html.indexOf('function uxDecorate')) throw new Error('自检失败：票据识别层必须在交互层之后注入')
 if (!/导出备份为文件/.test(html)) throw new Error('自检失败：备份入口文案未更新')
 if (html.indexOf('function storePack') < 0) throw new Error('自检失败：存储层缺失')
 if (/sms-parse/.test(html)) throw new Error('自检失败：源码注释未清理')
