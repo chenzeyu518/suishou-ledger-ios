@@ -33,9 +33,15 @@ set_key ITSAppUsesNonExemptEncryption bool false
 set_key UIFileSharingEnabled bool true
 set_key LSSupportsOpeningDocumentsInPlace bool true
 
+# 拍照识别票据（发票 / 小票）需要的用途说明
+# iOS 上只要用到相机或相册就必须声明，否则一调用就被系统直接杀掉进程
+set_key NSCameraUsageDescription string "用于拍摄发票、小票，在手机上识别成账目，照片不会上传。"
+set_key NSPhotoLibraryUsageDescription string "用于从相册选择发票或小票图片，识别成账目。"
+set_key NSPhotoLibraryAddUsageDescription string "用于把票据照片保存到相册。"
+
 # 仅竖屏
 "$PB" -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
 "$PB" -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
 "$PB" -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
 
-echo "✓ Info.plist 已配置（显示名 / 浅色界面 / 深色状态栏文字 / 竖屏 / 文件共享）"
+echo "✓ Info.plist 已配置（显示名 / 浅色界面 / 深色状态栏文字 / 竖屏 / 文件共享 / 相机与相册用途）"
