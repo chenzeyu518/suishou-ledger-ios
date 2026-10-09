@@ -146,7 +146,7 @@ function boot(store, plugins) {
   vm.createContext(sandbox)
   vm.runInContext(code, sandbox, { filename: 'www/index.html' })
   vm.runInContext(
-    'globalThis.__api = { get S(){return S}, get DB(){return DB}, get store(){return localStorage}, dstr, catchUp, parseText, quickTpl, seed, parseBankSms };',
+    'globalThis.__api = { get S(){return S}, get DB(){return DB}, get store(){return localStorage}, get OCR(){return OCR}, dstr, catchUp, parseText, quickTpl, seed, parseBankSms, parseInvoiceText, openOcr, ocrTake, ocrConfirm, ocrField, ocrType };',
     sandbox
   )
   return { sandbox, els, api: sandbox.__api, cssVars }
@@ -452,6 +452,91 @@ step('支付宝账单能带出商户与分类（公司后缀已清洗）', () =>
 })
 
 /* ---------------- 记录的删除体验（v1.4.0 交互补充层） ---------------- */
+/* ---------------- 发票 / 小票 拍照识别（解析层） ---------------- */
+console.log('\n== 发票 / 小票 拍照识别（解析）==')
+
+const VAT_TEXT = [
+  '电子发票（普通发票）',
+  '发票号码：24312000000012345678',
+  '开票日期：2026年10月08日',
+  '购买方信息 名称：张三',
+  '销售方信息 名称：上海某某餐饮管理有限公司',
+  '纳税人识别号：91310000MA1XXXXXXX',
+  '项目名称 规格型号 单位 数量 单价 金额 税率/征收率 税额',
+  '*餐饮服务*餐饮费 1 100.00 100.00 6% 6.00',
+  '合 计 ¥100.00 ¥6.00',
+  '价税合计（大写）壹佰零陆圆整 （小写）¥106.00'
+].join('\n')
+
+const RECEIPT_TEXT = ['某某便利店', '2026-10-08 12:30', '可乐 3.00', '面包 8.50', '合计 11.50', '实收 20.00', '找零 8.50'].join('\n')
+const CASH_TEXT = ['王记小吃', '2026-10-07', '实收 20.00', '找零 8.50'].join('\n')
+const TRAIN_TEXT = ['中国铁路电子客票', '2026-10-08', 'G1234 上海虹桥 - 苏州北', '票价 ¥39.50', '身份证 3205**********1234'].join('\n')
+const HOTEL_TEXT = [
+  '增值税电子普通发票',
+  '发票号码：12345678901234567890',
+  '开票日期：2026年10月05日',
+  '销售方信息 名称：苏州某某酒店管理有限公司',
+  '*住宿服务*住宿费 1 380.00 380.00 6% 22.80',
+  '价税合计（大写）肆佰零贰圆捌角整 （小写）¥402.80'
+].join('\n')
+
+step('增值税发票：金额取「价税合计（小写）」而不是不含税合计', () => {
+  const d = api.parseInvoiceText(VAT_TEXT)
+  if (!d.ok) throw new Error('未识别：' + d.reason)
+  if (d.amount !== 106) throw new Error('金额取错，应为 106，实际 ' + d.amount)
+  if (d.date !== '2026-10-08') throw new Error('日期错误：' + d.date)
+  if (d.dateGuessed) throw new Error('日期来自票面，不该标为猜测')
+  if (d.docName !== '增值税发票') throw new Error('票种错误：' + d.docName)
+  if (d.category !== 'canyin') throw new Error('分类错误：' + d.category)
+  if (d.seller.indexOf('餐饮') < 0) throw new Error('未取到销售方：' + d.seller)
+  if (d.invoiceNo !== '24312000000012345678') throw new Error('发票号码错误：' + d.invoiceNo)
+})
+step('小票：合计优先于实收，找零不参与', () => {
+  const d = api.parseInvoiceText(RECEIPT_TEXT)
+  if (!d.ok) throw new Error('未识别：' + d.reason)
+  if (d.amount !== 11.5) throw new Error('应取「合计 11.50」，实际 ' + d.amount)
+  if (d.seller !== '某某便利店') throw new Error('商户错误：' + d.seller)
+  if (d.category !== 'gouwu') throw new Error('分类错误：' + d.category)
+  if (d.date !== '2026-10-08') throw new Error('日期错误：' + d.date)
+})
+step('小票只有「实收 + 找零」时自动做减法', () => {
+  const d = api.parseInvoiceText(CASH_TEXT)
+  if (d.amount !== 11.5) throw new Error('未用实收减找零，实际 ' + d.amount)
+  if (d.seller !== '王记小吃') throw new Error('商户错误：' + d.seller)
+})
+step('火车票：票种与分类都归交通', () => {
+  const d = api.parseInvoiceText(TRAIN_TEXT)
+  if (d.docName !== '火车票') throw new Error('票种错误：' + d.docName)
+  if (d.amount !== 39.5) throw new Error('未取到票价，实际 ' + d.amount)
+  if (d.category !== 'jiaotong') throw new Error('分类错误：' + d.category)
+})
+step('住宿发票按品目归入旅行', () => {
+  const d = api.parseInvoiceText(HOTEL_TEXT)
+  if (d.amount !== 402.8) throw new Error('金额错误：' + d.amount)
+  if (d.category !== 'lvxing') throw new Error('分类错误：' + d.category)
+  if (d.docName !== '增值税发票') throw new Error('票种错误：' + d.docName)
+})
+step('与票据无关的照片必须被拒绝，不能生成糊涂账', () => {
+  const d = api.parseInvoiceText('今天天气不错\n随便拍的一张照片\n没有金额也没有日期')
+  if (d.ok) throw new Error('不该识别成功')
+  if (!d.reason) throw new Error('缺少原因说明')
+})
+step('识别不到金额时不判失败，而是给出手填提醒', () => {
+  const d = api.parseInvoiceText('某某超市\n合计 谢谢惠顾')
+  if (!d.ok) throw new Error('应进入确认卡让用户补金额：' + d.reason)
+  if (d.amount !== 0) throw new Error('金额应为 0，实际 ' + d.amount)
+  if (d.warnings.join('').indexOf('金额') < 0) throw new Error('缺少金额提醒')
+})
+step('首页「拍票入账」入口与识别模块都在正式版里', () => {
+  sandbox.switchTab('index')
+  if (!els.main._html.includes('onclick="openOcr()"')) throw new Error('首页入口缺失')
+  if (!els.main._html.includes('拍票入账')) throw new Error('首页入口文案缺失')
+  if (!html.includes('function parseInvoiceText')) throw new Error('解析模块未注入')
+  if (!html.includes('parseInvoiceText(text)')) throw new Error('识别结果未接入解析')
+  if (!html.includes('LedgerOCR') || !html.includes('OcrReader')) throw new Error('原生插件探测缺失')
+  if (!html.includes("source: 'ocr'")) throw new Error('入账来源未标记')
+})
+
 console.log('\n== 记录的删除体验 ==')
 step('保存后的提示延长到 9 秒，且按钮直接叫「删除」', () => {
   if (!/}, 9000\);/.test(html)) throw new Error('提示未延长到 9 秒')
@@ -512,6 +597,33 @@ const mockFs = {
   readdir() { return Promise.resolve({ files: [] }) }
 }
 const mockShare = { share() { return Promise.resolve() } }
+/* 相机桩：模拟 @capacitor/camera 的 getPhoto（result 传 Error 表示用户取消） */
+function mockCamera(result) {
+  return {
+    _calls: 0,
+    _opt: null,
+    getPhoto(o) {
+      this._calls++
+      this._opt = o
+      if (result instanceof Error) return Promise.reject(result)
+      return Promise.resolve(result)
+    }
+  }
+}
+/* 原生 OCR 桩：模拟 LedgerOCR.recognize，记录收到的图片路径 */
+function mockOcr(text) {
+  return {
+    _path: null,
+    recognize(o) {
+      this._path = o && o.path
+      return Promise.resolve({ text: text, lines: String(text).split('\n').length })
+    },
+    available() {
+      return Promise.resolve({ available: true })
+    }
+  }
+}
+const tick = (ms) => new Promise((r) => setTimeout(r, ms || 25))
 /* 钥匙串保险柜桩：模拟 iOS LedgerVault 原生插件 */
 function mockVault(seed) {
   const m = { v: seed || '' }
@@ -659,6 +771,84 @@ async function asteP(name, fn) {
     const files = Object.keys(mockFs._w).filter((f) => /^随手记账备份-\d{8}-\d{4}\.json$/.test(f))
     if (!files.length) throw new Error('未生成备份文件，实际：' + Object.keys(mockFs._w).join('/'))
     if (!JSON.parse(mockFs._w[files[0]]).bills.length) throw new Error('备份内容为空')
+  })
+
+  console.log('\n== 拍票入账（端到端）==')
+
+  await asteP('没有原生能力时给出降级提示（浏览器 / 预览页）', async () => {
+    const a = boot({}, {})
+    a.sandbox.openOcr()
+    if (!a.els.sheet._html.includes('此功能需要在 App 内使用')) throw new Error('缺少降级提示')
+  })
+
+  await asteP('拍照 → 原生识别 → 确认卡，参数与草稿都正确', async () => {
+    const cam = mockCamera({ path: '/var/mobile/tmp/fapiao.jpg' })
+    const ocr = mockOcr(VAT_TEXT)
+    const a = boot({}, { Camera: cam, LedgerOCR: ocr })
+    a.sandbox.openOcr()
+    a.sandbox.ocrTake('camera')
+    await tick()
+    if (a.api.OCR.step !== 'result') throw new Error('未进入确认卡：' + a.api.OCR.step + ' ' + a.api.OCR.err)
+    if (ocr._path !== '/var/mobile/tmp/fapiao.jpg') throw new Error('图片路径未传给原生：' + ocr._path)
+    if (cam._opt.source !== 'Camera') throw new Error('没有指定用相机拍')
+    if (cam._opt.resultType !== 'uri') throw new Error('应使用文件路径模式而不是 base64')
+    if (a.api.OCR.draft.amount !== 106) throw new Error('草稿金额错误：' + a.api.OCR.draft.amount)
+    if (!a.els.sheet._html.includes('确认入账')) throw new Error('确认卡未渲染')
+    if (!a.els.sheet._html.includes('106')) throw new Error('确认卡未带出金额')
+
+    a.api.ocrField('note', '客户招待')
+    a.api.ocrConfirm()
+    const bill = a.api.DB.bills[0]
+    if (!bill) throw new Error('未写入账单')
+    if (bill.amount !== 106) throw new Error('入账金额错误：' + bill.amount)
+    if (bill.category !== 'canyin') throw new Error('分类错误：' + bill.category)
+    if (bill.source !== 'ocr') throw new Error('未标记拍照来源')
+    if (bill.note !== '客户招待') throw new Error('手工修改的备注未生效：' + bill.note)
+    if (bill.date !== '2026-10-08') throw new Error('日期错误：' + bill.date)
+  })
+
+  await asteP('小票走同一套流程，file:// 路径自动归一化', async () => {
+    const ocr = mockOcr(RECEIPT_TEXT)
+    const a = boot({}, { Camera: mockCamera({ path: 'file:///var/mobile/tmp/piao.jpg' }), LedgerOCR: ocr })
+    a.sandbox.openOcr()
+    a.sandbox.ocrTake('photos')
+    await tick()
+    if (ocr._path !== '/var/mobile/tmp/piao.jpg') throw new Error('file:// 未归一化：' + ocr._path)
+    if (a.api.OCR.draft.amount !== 11.5) throw new Error('金额错误：' + a.api.OCR.draft.amount)
+    a.api.ocrConfirm()
+    if (!a.api.DB.bills.some((b) => b.amount === 11.5 && b.source === 'ocr')) throw new Error('未入账')
+  })
+
+  await asteP('用户取消拍照不报错，回到拍摄选择页', async () => {
+    const cam = mockCamera(new Error('User cancelled photos app'))
+    const a = boot({}, { Camera: cam, LedgerOCR: mockOcr('') })
+    a.sandbox.openOcr()
+    a.sandbox.ocrTake('camera')
+    await tick()
+    if (a.api.OCR.step !== 'pick') throw new Error('取消后状态错误：' + a.api.OCR.step)
+    if (!a.els.sheet._html.includes('拍照识别')) throw new Error('未回到选择页')
+  })
+
+  await asteP('识别失败时展示失败原因与重拍入口', async () => {
+    const a = boot({}, { Camera: mockCamera({ path: '/tmp/x.jpg' }), LedgerOCR: mockOcr('') })
+    a.sandbox.openOcr()
+    a.sandbox.ocrTake('camera')
+    await tick()
+    if (a.api.OCR.step !== 'fail') throw new Error('未进入失败态：' + a.api.OCR.step)
+    if (!a.els.sheet._html.includes('重拍一张')) throw new Error('缺少重拍入口')
+    if (!a.els.sheet._html.includes('改用粘贴账单导入')) throw new Error('缺少兜底入口')
+  })
+
+  await asteP('拍票入账同样写入持久化（与手工记账同一条链路）', async () => {
+    const st = {}
+    const a = boot(st, { Camera: mockCamera({ path: '/tmp/y.jpg' }), LedgerOCR: mockOcr(VAT_TEXT) })
+    a.sandbox.openOcr()
+    a.sandbox.ocrTake('camera')
+    await tick()
+    a.api.ocrConfirm()
+    if (!st['ledger_h5_v1']) throw new Error('未写入本机镜像')
+    const saved = JSON.parse(st['ledger_h5_v1'])
+    if (!saved.bills.length || saved.bills[0].source !== 'ocr') throw new Error('持久化内容不对')
   })
 
   console.log('\n运行期错误日志：' + errors.length + ' 条')
