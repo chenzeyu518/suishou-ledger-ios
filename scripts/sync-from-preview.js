@@ -110,7 +110,7 @@ function doLoadDemo(){
 )
 
 /* ---------------- 6. 版本与页脚文案 ---------------- */
-patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.5.0</span>`)
+patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.6.0</span>`)
 patch(
   'footer',
   `本页为小程序交互预览，数据仅存于本机浏览器`,
@@ -278,6 +278,8 @@ if (!/function openOcr/.test(html)) throw new Error('自检失败：拍票入账
 if (!/onclick="openOcr\(\)"/.test(html)) throw new Error('自检失败：首页「拍票入账」入口缺失')
 if (!/LedgerOCR/.test(html) || !/OcrReader/.test(html)) throw new Error('自检失败：原生 OCR 插件探测缺失')
 if (!/parseInvoiceText\(text\)/.test(html)) throw new Error('自检失败：识别结果未接入票据解析')
+if (!/function parseInvoiceItems/.test(html)) throw new Error('自检失败：单项明细解析缺失')
+if (!/ocrConfirmItems/.test(html)) throw new Error('自检失败：按单项入账入口缺失')
 if (!/source: 'ocr'/.test(html)) throw new Error('自检失败：入账未标记拍照来源')
 if (html.indexOf('function parseInvoiceText') < html.indexOf('function uxDecorate')) throw new Error('自检失败：票据识别层必须在交互层之后注入')
 if (!/导出备份为文件/.test(html)) throw new Error('自检失败：备份入口文案未更新')
