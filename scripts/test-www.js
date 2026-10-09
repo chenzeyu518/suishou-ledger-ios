@@ -89,7 +89,7 @@ function fakeEl(id) {
   return el
 }
 
-function boot(store) {
+function boot(store, plugins) {
   const els = {}
   const cssVars = {}
   const document = {
@@ -123,6 +123,7 @@ function boot(store) {
     Boolean,
     RegExp,
     Error,
+    Promise,
     isNaN,
     parseFloat,
     parseInt,
@@ -139,6 +140,7 @@ function boot(store) {
       return 1
     }
   }
+  if (plugins) sandbox.Capacitor = { Plugins: plugins }
   sandbox.window = sandbox
   sandbox.globalThis = sandbox
   vm.createContext(sandbox)
@@ -449,6 +451,113 @@ step('支付宝账单能带出商户与分类（公司后缀已清洗）', () =>
   if (luckin.category !== 'canyin') throw new Error('分类 ' + luckin.category + '，应为 canyin')
 })
 
-console.log('\n运行期错误日志：' + errors.length + ' 条')
-if (errors.length) errors.slice(0, 5).forEach((e) => console.log('  ! ' + e))
-process.exit(errors.length || failed ? 1 : 0)
+/* ---------------- 存储加固层（三副本互备） ---------------- */
+function mockPrefs(seed) {
+  const m = Object.assign({}, seed || {})
+  return {
+    _m: m,
+    set(o) { m[o.key] = String(o.value); return Promise.resolve() },
+    get(o) { return Promise.resolve({ value: o.key in m ? m[o.key] : null }) },
+    remove(o) { delete m[o.key]; return Promise.resolve() },
+    keys() { return Promise.resolve({ keys: Object.keys(m) }) }
+  }
+}
+const mockFs = {
+  _w: {},
+  writeFile(o) { mockFs._w[o.path] = o.data; return Promise.resolve({ uri: 'file:///docs/' + o.path }) },
+  readFile(o) { return Promise.resolve({ data: mockFs._w[o.path] || null }) },
+  readdir() { return Promise.resolve({ files: [] }) }
+}
+const mockShare = { share() { return Promise.resolve() } }
+function payload(rev, n, tag) {
+  return JSON.stringify({
+    app: '随手记账', v: 1, rev,
+    bills: Array.from({ length: n }, (_, i) => ({
+      _id: tag + i, type: 'expense', amount: 10 + i, category: 'canyin',
+      note: tag + i, date: '2026-10-0' + ((i % 9) + 1), time: '12:00', ts: rev + i
+    })),
+    rules: [], budgets: {}
+  })
+}
+async function asteP(name, fn) {
+  try {
+    await fn()
+    console.log('  ✓ ' + name)
+  } catch (e) {
+    console.error = origError
+    console.error(`  ✗ ${name}\n     ${e.stack.split('\n').slice(0, 3).join('\n     ')}`)
+    failed = 1
+  }
+}
+
+;(async () => {
+  console.log('\n== 存储加固层（三副本互备）==')
+
+  await asteP('首次升级：旧镜像数据自动搬进系统级主存储', async () => {
+    const prefs = mockPrefs({})
+    const st = {}
+    st['ledger_h5_v1'] = payload(1000, 3, 'old')
+    const a = boot(st, { Preferences: prefs })
+    await a.sandbox.storeSync()
+    const saved = prefs._m['ledger_native_v1']
+    if (!saved) throw new Error('未写入主存储')
+    if (JSON.parse(saved).bills.length !== 3) throw new Error('迁移的数据条数不对')
+  })
+
+  await asteP('镜像被清空时从系统级主存储恢复（本次丢数据的核心场景）', async () => {
+    const prefs = mockPrefs({ ledger_native_v1: payload(2000, 5, 'sys') })
+    const a = boot({}, { Preferences: prefs })
+    if (a.api.DB.bills.length !== 0) throw new Error('前置条件错误：镜像应为空')
+    await a.sandbox.storeSync()
+    if (a.api.DB.bills.length !== 5) throw new Error('未从主存储恢复，实际 ' + a.api.DB.bills.length + ' 笔')
+    if (!a.api.DB.bills.some((b) => b.note === 'sys0')) throw new Error('恢复的数据不对')
+  })
+
+  await asteP('主存储与镜像都空时自动从最近快照恢复', async () => {
+    const prefs = mockPrefs({ ledger_snap_v1_1700000000000: payload(3000, 7, 'snap') })
+    const a = boot({}, { Preferences: prefs })
+    await a.sandbox.storeSync()
+    if (a.api.DB.bills.length !== 7) throw new Error('未从快照恢复，实际 ' + a.api.DB.bills.length + ' 笔')
+  })
+
+  await asteP('多副本冲突时取写入时间更新的一份', async () => {
+    const prefs = mockPrefs({ ledger_native_v1: payload(5000, 6, 'new') })
+    const st = {}
+    st['ledger_h5_v1'] = payload(4000, 2, 'old')
+    const a = boot(st, { Preferences: prefs })
+    await a.sandbox.storeSync()
+    if (a.api.DB.bills.length !== 6) throw new Error('未取最新副本，实际 ' + a.api.DB.bills.length + ' 笔')
+  })
+
+  await asteP('保存时三层同时落盘并生成快照', async () => {
+    const prefs = mockPrefs({})
+    const st = {}
+    const a = boot(st, { Preferences: prefs, Filesystem: mockFs })
+    ;['1', '2', '.', '5', '0'].forEach((k) => a.sandbox.onKey(k))
+    a.sandbox.onNote('星巴克')
+    a.sandbox.saveBill()
+    if (!st['ledger_h5_v1']) throw new Error('镜像未写入')
+    if (!prefs._m['ledger_native_v1']) throw new Error('主存储未写入')
+    const snaps = Object.keys(prefs._m).filter((k) => k.indexOf('ledger_snap_v1_') === 0)
+    if (!snaps.length) throw new Error('未生成快照')
+    if (JSON.parse(prefs._m['ledger_native_v1']).bills.length !== 1) throw new Error('主存储内容不对')
+  })
+
+  await asteP('导出备份写成 .json 文件', async () => {
+    const prefs = mockPrefs({})
+    Object.keys(mockFs._w).forEach((k) => delete mockFs._w[k])
+    const a = boot({}, { Preferences: prefs, Filesystem: mockFs, Share: mockShare })
+    a.sandbox.onKey('9')
+    a.sandbox.onKey('9')
+    a.sandbox.saveBill()
+    a.sandbox.exportData()
+    await new Promise((r) => setTimeout(r, 30))
+    const files = Object.keys(mockFs._w).filter((f) => /^随手记账备份-\d{8}-\d{4}\.json$/.test(f))
+    if (!files.length) throw new Error('未生成备份文件，实际：' + Object.keys(mockFs._w).join('/'))
+    if (!JSON.parse(mockFs._w[files[0]]).bills.length) throw new Error('备份内容为空')
+  })
+
+  console.log('\n运行期错误日志：' + errors.length + ' 条')
+  if (errors.length) errors.slice(0, 5).forEach((e) => console.log('  ! ' + e))
+  process.exit(errors.length || failed ? 1 : 0)
+})()
