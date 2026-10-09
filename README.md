@@ -10,6 +10,23 @@
 应用本体在 `www/index.html`，与小程序版共用同一套交互与逻辑（智能归类、周期自动
 记账、批量导入、预算、Canvas 图表），数据只存在手机本地，**无任何网络请求**。
 
+## 当前交付状态：IPA 已构建完成
+
+| 项目 | 值 |
+|---|---|
+| IPA 文件 | `C:\Users\Administrator\Desktop\SuishouLedger.ipa` |
+| 大小 | 942,307 字节（解包后 2.5 MB，25 个文件） |
+| App 名称 / 包名 | 随手记账 / `com.suishou.ledger` |
+| 版本 / 最低系统 | 1.0.0 (1) / iOS 13.0 |
+| 架构 | arm64（Mach-O 64 位，魔数 `0xFEEDFACF`） |
+| 构建方式 | GitHub Actions `macos-14`，Run `37902630088`，**1 分 11 秒** |
+| 仓库 | <https://github.com/chenzeyu518/suishou-ledger-ios>（public） |
+| 签名状态 | **未签名**，需用免费 Apple ID 通过 Sideloadly 重签安装（见路线 A 第 3 步） |
+
+包已实测校验：`Payload/App.app` 位于压缩包根（符合 IPA 规范），Capacitor /
+CapacitorHaptics / Cordova 框架与图标、启动图齐全，包内 `public/index.html`
+与本地 `www/index.html` **md5 完全一致**。
+
 ## 目录结构
 
 ```
@@ -40,22 +57,51 @@ ledger-ios/
 
 ## 路线 A：云端构建，免费装到 iPhone（无需 Mac）
 
+> **当前状态：这一步已经完成过了。**
+> 仓库地址 <https://github.com/chenzeyu518/suishou-ledger-ios>（public），
+> 首次构建 Run `37902630088` 用时 **1 分 11 秒**，产出的
+> `SuishouLedger.ipa`（942,307 字节）已放在桌面。直接从「第 3 步」开始即可。
+> 下面第 1、2 步保留，供以后改动代码后重新构建时参考。
+
 ### 第 1 步：把工程推到 GitHub
+
+仓库已建好并已绑定远程，日常更新只需：
+
+```bash
+cd "C:/Users/Administrator/WorkBuddy/2026-10-09-14-43-39/ledger-ios"
+git add . && git commit -m "更新说明"
+git push
+```
+
+从零开始的完整命令（换新仓库时用）：
 
 ```bash
 cd ledger-ios
 git init && git add . && git commit -m "随手记账 iOS 打包工程"
-# 在 github.com 新建一个空仓库（如 suishou-ledger-ios），然后：
 git remote add origin https://github.com/<你的用户名>/suishou-ledger-ios.git
 git push -u origin main
 ```
 
+> 注意：推送 `.github/workflows/` 下的流水线文件要求令牌具备 **`workflow`** 作用域。
+> gh CLI 默认令牌只有 `repo, read:org, gist`，需先执行
+> `gh auth refresh -h github.com -s workflow` 补充授权，否则 GitHub 会拒绝推送。
+
 ### 第 2 步：云端自动构建
 
 推送后 GitHub Actions 会自动开始构建（或到 **Actions → Build iOS IPA → Run
-workflow** 手动触发）。约 5~8 分钟后，在该次运行页面底部
-**Artifacts** 下载 `SuishouLedger-unsigned-ipa`，解压得到
-`SuishouLedger-unsigned.ipa`。
+workflow** 手动触发）。实测约 **1~2 分钟**出包（首次含 pod install 会更久些）。
+
+用 gh CLI 一条命令取回产物：
+
+```bash
+GH="C:/Users/Administrator/.workbuddy/tools/gh/bin/gh.exe"
+"$GH" run list --repo chenzeyu518/suishou-ledger-ios --limit 1
+"$GH" run download <RunID> --repo chenzeyu518/suishou-ledger-ios \
+      -n SuishouLedger-unsigned-ipa -D ./ipa-out
+```
+
+或在该次运行页面底部 **Artifacts** 下载 `SuishouLedger-unsigned-ipa`，
+解压得到 `SuishouLedger-unsigned.ipa`。
 
 > 这是**未签名** IPA——苹果规定安装包必须签名，下一步用你自己的 Apple ID 签。
 
