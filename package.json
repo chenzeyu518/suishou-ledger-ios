@@ -1,0 +1,22 @@
+{
+  "name": "suishou-ledger-ios",
+  "version": "1.0.0",
+  "private": true,
+  "description": "随手记账 · iOS 客户端（Capacitor 壳工程，构建产出 .ipa）",
+  "scripts": {
+    "test": "node scripts/test-www.js",
+    "assets": "python3 scripts/make-assets.py",
+    "add:ios": "cap add ios",
+    "sync": "cap sync ios",
+    "open": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/haptics": "^6.0.2",
+    "@capacitor/ios": "^6.2.0"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^6.2.0"
+  }
+}

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  导出选项模板（ad-hoc 分发：装到指定设备，无需上架）。
+  __TEAM_ID__ / __BUNDLE_ID__ / __PROFILE__ 由构建脚本或 CI 用实际值替换。
+  PROFILE 填描述文件「名称」（不是文件名）。
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>ad-hoc</string>
+	<key>teamID</key>
+	<string>__TEAM_ID__</string>
+	<key>signingStyle</key>
+	<string>manual</string>
+	<key>stripSwiftSymbols</key>
+	<true/>
+	<key>compileBitcode</key>
+	<false/>
+	<key>thinning</key>
+	<string>&lt;none&gt;</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>__BUNDLE_ID__</key>
+		<string>__PROFILE__</string>
+	</dict>
+</dict>
+</plist>

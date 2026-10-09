@@ -1,0 +1,11 @@
+{
+  "appId": "com.suishou.ledger",
+  "appName": "随手记账",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#F5F6FA",
+    "scrollEnabled": true,
+    "preferredContentMode": "mobile"
+  }
+}
