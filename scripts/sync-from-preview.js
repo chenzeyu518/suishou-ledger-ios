@@ -5,6 +5,11 @@
  * 本脚本负责把「预览版」差异替换为「正式版」差异，每一项替换都做断言，
  * 预览页结构变化导致任何一项匹配失败时立即报错退出，不会悄悄产出错误结果。
  *
+ * v1.3.0 起数据存储加固（与 Android 版同一份 native/www/store-module.js）：
+ *   - Preferences 系统级存储为主 + localStorage 镜像 + 滚动快照，三副本互备
+ *   - 启动时取 rev（写入时间戳）最新的一份；主存储为空时自动从快照恢复
+ *   - 导出升级为写入 Documents 的 .json 文件，可进「文件」App / iCloud / 发给别人
+ *
  * v1.2.0 起与 Android 版能力对齐（受限于 iOS 沙箱，实现方式不同）：
  *   - 官方账单解析升级：识别微信 / 支付宝官方 CSV，跳过「不计收支」与已退款 / 已关闭交易
  *   - 银行消费短信解析：iOS 读不到短信收件箱，改为在「信息」中复制后粘贴导入
@@ -96,7 +101,7 @@ function doLoadDemo(){
 )
 
 /* ---------------- 6. 版本与页脚文案 ---------------- */
-patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.2.0</span>`)
+patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.3.0</span>`)
 patch(
   'footer',
   `本页为小程序交互预览，数据仅存于本机浏览器`,
@@ -136,6 +141,18 @@ patch(
   'parse-text-sms',
   `    items = []; failed = [];\n    lines.forEach(l => { const s = l.trim(); if (!s) return; const one = parseLine(s, ctx); if (one) items.push(one); else if (s.length > 6 && /[\\u4e00-\\u9fa5]/.test(s)) failed.push(s); });`,
   `    items = []; failed = [];\n    lines.forEach(l => {\n      const s = l.trim(); if (!s) return;\n      /* 银行 / 支付短信：走专项解析（自动排除余额数字、抽取商户、识别「摘要」用途） */\n      if (looksLikeSms(s)) {\n        const bs = parseBankSms({ body: s });\n        if (bs) {\n          items.push({ type: bs.type, amount: bs.amount, note: bs.note, date: bs.date, time: bs.time,\n            dateGuessed: bs.dateGuessed, category: bs.category });\n          return;\n        }\n      }\n      const one = parseLine(s, ctx); if (one) items.push(one); else if (s.length > 6 && /[\\u4e00-\\u9fa5]/.test(s)) failed.push(s);\n    });`
+)
+
+/* ---------------- 6f. 我的页：备份与恢复入口（数据安全，重点） ---------------- */
+patch(
+  'mine-backup-sub',
+  `<div class="bd"><div class="t">导出备份（JSON）</div><div class="s">复制到剪贴板，可保存到备忘录或文件</div></div>`,
+  `<div class="bd"><div class="t">导出备份为文件</div><div class="s">存成 .json，可放「文件」App 或发给自己</div></div>`
+)
+patch(
+  'mine-restore-sub',
+  `<div class="bd"><div class="t">从剪贴板恢复</div><div class="s">换设备时把备份文本粘贴回来</div></div>`,
+  `<div class="bd"><div class="t">备份与恢复</div><div class="s">快照 / 备份文件 / 粘贴文本，三种方式</div></div>`
 )
 
 /* ---------------- 7. 原理说明：贴合 iOS 独立 App 的真实情况 ---------------- */
@@ -183,6 +200,12 @@ if (!fs.existsSync(smsPath)) throw new Error('缺少 native/www/sms-parse.js')
 const smsCode = fs.readFileSync(smsPath, 'utf8')
 patch('sms-parse', `</script>\n</body>`, smsCode + `\n</script>\n</body>`)
 
+/* ---------------- 10. 存储加固层（整段注入：接管保存、导出与恢复） ---------------- */
+const storePath = path.join(root, 'native', 'www', 'store-module.js')
+if (!fs.existsSync(storePath)) throw new Error('缺少 native/www/store-module.js')
+const storeCode = fs.readFileSync(storePath, 'utf8')
+patch('store-module', `</script>\n</body>`, storeCode + `\n</script>\n</body>`)
+
 const out = path.join(root, 'www', 'index.html')
 fs.writeFileSync(out, html)
 
@@ -199,6 +222,9 @@ if (!/parseBankSms\(\{ body: s \}\)/.test(html)) throw new Error('自检失败�
 if (!/iS = col\('当前状态'/.test(html)) throw new Error('自检失败：账单状态列未识别')
 if (!/不计收支/.test(html)) throw new Error('自检失败：官方账单「不计收支」过滤缺失')
 if (!/短信 \/ 微信 \/ 支付宝账单/.test(html)) throw new Error('自检失败：导入入口副标题未更新')
+if (!/storeSync/.test(html) || !/ledger_native_v1/.test(html)) throw new Error('自检失败：存储加固层未注入')
+if (!/storeRestore/.test(html)) throw new Error('自检失败：快照兜底恢复逻辑缺失')
+if (!/导出备份为文件/.test(html)) throw new Error('自检失败：备份入口文案未更新')
 if (/sms-parse/.test(html)) throw new Error('自检失败：源码注释未清理')
 
 console.log('已生成正式版：%s（%d KB）', out, Math.round(html.length / 1024))
