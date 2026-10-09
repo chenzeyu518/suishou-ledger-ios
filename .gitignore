@@ -3,7 +3,7 @@ node_modules/
 
 # iOS 原生工程由 `npx cap add ios` 生成，不入库（CI 会自动生成）
 # 如需把 Xcode 工程入库（方便本地用 Xcode 打开），删除本行并提交 ios/ 即可
-ios/
+/ios/
 
 # 构建产物
 build/
