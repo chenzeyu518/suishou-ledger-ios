@@ -32,6 +32,7 @@ CapacitorHaptics / Cordova 框架与图标、启动图齐全，包内 `public/in
 ```
 ledger-ios/
 ├── www/index.html              # 应用本体（正式版：无演示数据、无预览徽标、原生外壳适配）
+├── native/www/sms-parse.js     # 银行 / 支付短信文本解析（粘贴导入用，随 www 一起注入）
 ├── assets/                     # 应用图标 + 启动图（scripts/make-assets.py 生成）
 ├── capacitor.config.json       # App ID: com.suishou.ledger
 ├── package.json                # Capacitor 6 依赖
@@ -39,11 +40,18 @@ ledger-ios/
 │   ├── build-ipa.sh            # Mac 本地一键构建签名 IPA
 │   ├── patch-ios-plist.sh      # 配置 Info.plist（显示名/浅色界面/竖屏/状态栏）
 │   ├── make-assets.py          # 重新生成图标与启动图（纯标准库，可自定义配色）
-│   ├── sync-from-preview.js    # 从 H5 预览页同步生成正式版 www/index.html
-│   └── test-www.js             # 冒烟测试（18 项断言 + 重启持久化检查）
+│   ├── sync-from-preview.js    # 从 H5 预览页同步生成正式版 www/index.html（21 项补丁，逐项断言）
+│   └── test-www.js             # 冒烟测试（46 项断言 + 重启持久化检查）
 ├── signing/                    # 签名导出配置模板（ad-hoc / development / app-store）
 └── .github/workflows/ios-ipa.yml   # GitHub Actions 云端构建 → 产出 .ipa
 ```
+
+> **v1.2.0 能力说明**：iOS 沙箱不允许任何 App 读取短信收件箱或微信的聊天 / 支付数据，
+> 因此本版不申请任何读取权限，改为在「批量导入账单」里支持两类官方数据源 ——
+> ① 在「信息」中长按复制银行消费短信粘贴导入（自动排除余额数字、抽取商户与「摘要」用途）；
+> ② 微信 / 支付宝「下载账单 → 用于个人对账」导出的官方 CSV 直接粘贴导入
+> （自动跳过提现等「不计收支」行与已退款 / 已关闭交易，商户名自动清洗后归类）。
+> 解析口径与 Android 版的原生短信自动入账保持同源。
 
 ## 三条路线怎么选
 
