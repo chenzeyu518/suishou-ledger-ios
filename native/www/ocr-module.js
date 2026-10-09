@@ -11,10 +11,14 @@
    解析口径（宁漏不错，拿不准就交给用户确认）：
      金额优先级：价税合计（小写）> 应付/实付/合计金额 > 合计/总计/应收/应付/票价
                  > 实收（若票面另有「找零」，用「实收 − 找零」校正）
+                 > 票面没打合计时（外卖单常见），取各单项金额之和
+     单项明细：   外卖单 / 超市小票逐品目拆行（品名 + *数量 + 行尾金额），
+                 ≥2 项时在确认卡里逐行列出，可勾选、可改金额，支持按单项记 N 笔
      整行排除：  找零、税额、税率、折扣、优惠、单价、数量、余额、积分、
                  发票代码、发票号码、识别号、校验码、日期、电话等
      分类优先级：发票品目里的 *类别* 星号标记 > 品目/商户名关键词 > 页面通用词典
-     日期：      2026年10月08日 / 2026-10-08 / 10月08日；抽不到才退回当天
+     日期：      2026年10月08日 / 2026-10-08 / 10月08日 / 下单时间:10-09 17:59；
+                 抽不到才退回当天
    ------------------------------------------------------------------------------ */
 
 /* ---------------- 19.1 词表 ---------------- */
@@ -64,6 +68,7 @@ function invDocType(flat) {
   if (/出租车|的士|网约车|滴滴/.test(flat)) return { key: 'taxi', name: '出行票据' };
   if (/增值税|电子发票|普通发票|专用发票|发票代码|发票号码|数电票/.test(flat)) return { key: 'vat', name: '增值税发票' };
   if (/定额发票/.test(flat)) return { key: 'quota', name: '定额发票' };
+  if (/美团外卖|饿了么|外卖小票|下单时间|出餐|门店新客/.test(flat)) return { key: 'waimai', name: '外卖小票' };
   if (/收据|小票|结算单|消费清单|购物清单|POS/.test(flat)) return { key: 'receipt', name: '小票 / 收据' };
   return { key: 'receipt', name: '票据' };
 }
@@ -78,6 +83,8 @@ function invAmount(lines) {
     var L = String(lines[i]).replace(/\s+/g, '');
     if (!L || L.length > 90) continue;
     if (INV_AMT_BAD.test(L) && !/价税合计|小写/.test(L)) continue;
+    /* 「合计:【*5】」这类括起来的数字是件数不是金额：去掉件数标记后行内再无数字则整行放弃 */
+    if (/【\s*[*×xX]?\d+\s*】/.test(L) && !/\d/.test(L.replace(/【\s*[*×xX]?\d+\s*】/g, ''))) continue;
 
     var ls = 0;
     for (j = 0; j < INV_AMT_LABELS.length; j++) {
@@ -118,6 +125,67 @@ function invChange(lines) {
   return null;
 }
 
+/* ---- 19.2b 单项明细（美团 / 饿了么外卖单、超市小票等逐品目金额） ---- */
+
+/* 这些行是票头票脚，不是商品 */
+var INV_ITEM_BAD = /(合计|总计|总额|小计|实付|实收|应收|应付|支付|付款|找零|找赎|优惠|红包|满减|折扣|会员价|积分|抵扣|立减|券|发票|税号|税额|订单|编号|单号|流水|电话|手机|尾号|号码|地址|顾客|客户|门店|出餐|送达|下单|取餐|备注|转\d|条形码|条码|二维码|id[:：]|no[.：:#]|pos|收银|机号|打印机|本单|谢谢|惠顾|欢迎|现金|收款|扫码|刷卡|挂账|签单|微信|支付宝)/i;
+/* 这些行是费用项，默认也算支出 */
+var INV_ITEM_FEE = /(配送费|外送费|跑腿费|打包费|餐盒费|包装费|服务费)/;
+
+/**
+ * 逐行拆单项：品名 + 数量 + 行尾金额。
+ * 难点是「*1 12.0」去空格后粘成「*112.0」——拆法：数量标记后的数字区，
+ * 小数点把金额定位住，整数部分的首位给数量（数量个位数远比两位常见），
+ * 其余是金额；「米饭【*2】4.0」这种有 】 隔开的，】后整段是金额。
+ * 无数量标记的行要求金额带小数点，避免把「美团外卖 #32」这类票头当商品。
+ * 行尾数字默认按「该项小计」理解；单价口径由合计校验决定（见 parseInvoiceText）。
+ */
+function parseInvoiceItems(lines) {
+  var items = [], i;
+  for (i = 0; i < lines.length; i++) {
+    var rawL = String(lines[i]).trim();
+    var L = rawL.replace(/[\s\u00a0]+/g, '');
+    if (L.length < 3 || L.length > 60) continue;
+    if (INV_ITEM_BAD.test(L)) continue;
+
+    var qty = 1, amount = 0, name = '';
+    var mSym = /[*×xX]/.exec(L);
+
+    if (mSym && mSym.index > 0) {
+      /* 数量标记之后：[【[] 数字区 []】] 尾随金额 */
+      var mD = L.slice(mSym.index + 1).match(/^(?:【|\[)?([\d.]+)(?:】|\])?(.*)$/);
+      if (!mD) continue;
+      var D = mD[1], tail = (mD[2] || '').replace(/^[¥￥]/, '');
+      var dot = D.indexOf('.');
+      if (dot >= 0) {
+        /* 数量与金额粘在一起：整数部分首位是数量，其余是金额（*112.0 → 1 份 12.0） */
+        var I = D.slice(0, dot);
+        if (I.length >= 2) { qty = +I.charAt(0) || 1; amount = parseFloat(I.slice(1) + '.' + D.slice(dot + 1)); }
+        else { qty = 1; amount = parseFloat(D); }          /* *2.50 → 金额 2.50，无数量 */
+      } else if (D.length >= 2) {
+        qty = +D.charAt(0) || 1; amount = parseFloat(D.slice(1));   /* *24 → 2 份 4 元 */
+      } else {
+        qty = +D || 1; amount = parseFloat(tail) || 0;              /* *2 4 → 】或空格隔开的行尾金额 */
+      }
+      if (!(amount > 0) || amount > 99999) continue;
+      name = L.slice(0, mSym.index);
+    } else {
+      var mTail = L.match(/[¥￥]?(\d{1,4}\.\d{1,2})元?$/);
+      if (!mTail) continue;
+      amount = parseFloat(mTail[1]);
+      if (!(amount > 0) || amount > 99999) continue;
+      name = L.slice(0, mTail.index);
+    }
+
+    name = name.replace(/[¥￥:：#＃（(【\[、,，.。\-—–_]+\s*$/, '').trim();
+    if (!name || !/[\u4e00-\u9fa5A-Za-z]/.test(name)) continue;
+    if (name.length > 24) name = name.slice(0, 24);
+
+    items.push({ name: name, qty: qty, amount: amount, fee: INV_ITEM_FEE.test(name) });
+  }
+  return items;
+}
+
 /** 日期：先找带年份的完整写法，再找「10月08日」 */
 function invDate(text) {
   var s = String(text).replace(/\s+/g, '');
@@ -131,6 +199,14 @@ function invDate(text) {
     var mo2 = +m[1], d2 = +m[2];
     if (mo2 >= 1 && mo2 <= 12 && d2 >= 1 && d2 <= 31) {
       return { y: new Date().getFullYear(), m: mo2, d: d2, exact: true };
+    }
+  }
+  /* 外卖 / 团购小票：「下单时间:10-09 17:59」（本年同月日） */
+  m = s.match(/(?:下单|交易|消费|打印)时间[:：]?(\d{1,2})-(\d{1,2})(?:\d{1,2}:\d{2})?/);
+  if (m) {
+    var mo3 = +m[1], d3 = +m[2];
+    if (mo3 >= 1 && mo3 <= 12 && d3 >= 1 && d3 <= 31) {
+      return { y: new Date().getFullYear(), m: mo3, d: d3, exact: true };
     }
   }
   return { exact: false };
@@ -161,7 +237,7 @@ function invSeller(lines, flat) {
     if (/[-—~～至]/.test(L)) continue;                   /* 出发地-到达地 */
     if (/[¥￥]/.test(L)) continue;                        /* 带金额的行不是店名 */
     if (/\d+\.\d/.test(L)) continue;
-    if (/(发票|小票|收据|清单|消费|购物|欢迎|谢谢|惠顾|光临|日期|时间|电话|地址|编号|单号|序号|收银|找零|合计|金额|商品|数量|单价|会员|门店|客票|行程单|铁路|航空|出行|身份证|证件|姓名|座位|车厢|席别|NO|POS)/i.test(L)) continue;
+    if (/(发票|小票|收据|清单|消费|购物|欢迎|谢谢|惠顾|光临|日期|时间|电话|地址|编号|单号|序号|收银|找零|合计|金额|商品|数量|单价|会员|门店|客票|行程单|铁路|航空|出行|身份证|证件|姓名|座位|车厢|席别|NO|POS|[#＃]|美团|饿了么)/i.test(L)) continue;
     return L;
   }
   return '';
@@ -228,8 +304,28 @@ function parseInvoiceText(text) {
   var invNo = (flat.match(/发票号码[:：]?(\d{6,24})/) || [])[1] || '';
   var goods = (dense.match(/\*[^*\n]{1,20}\*[^*\n]{1,20}/g) || []).slice(0, 3).join(' ');
 
+  /* 单项明细：外卖单 / 超市小票的逐品目金额（≥2 项才启用单项模式） */
+  var its = parseInvoiceItems(lines);
+  var itsSum = 0, itsSumQty = 0, i2;
+  for (i2 = 0; i2 < its.length; i2++) {
+    itsSum = Math.round((itsSum + its[i2].amount) * 100) / 100;
+    itsSumQty = Math.round((itsSumQty + its[i2].amount * its[i2].qty) * 100) / 100;
+  }
+  if (its.length >= 2 && amt && amt.s < 30 && !/(合计|总计|总额|小计|实付|实收|应付|应收|金额|价税|票价|支付|付款)/.test(amt.line)) {
+    amt = null; amount = 0;   /* 命中的只是某个单项行（无任何金额标签），不是票面合计 */
+  }
+  if (its.length >= 2 && !amount) amount = itsSum;   /* 票面没打合计（如被裁掉），用单项之和兜底 */
+  if (its.length >= 2 && amt && Math.abs(amount - itsSum) > 0.02 && Math.abs(amount - itsSumQty) <= 0.02) {
+    /* 行尾数字其实是单价：合计 = 单价 × 数量，把每个单项乘回去 */
+    for (i2 = 0; i2 < its.length; i2++) {
+      its[i2].amount = Math.round(its[i2].amount * its[i2].qty * 100) / 100;
+      its[i2].qty = 1;
+    }
+    itsSum = itsSumQty;
+  }
+
   /* 门槛：必须至少命中一项「票据特征」，否则拍风景照也会生成一笔糊涂账 */
-  var docSignal = /(发票|收据|小票|清单|结算|客票|行程单|票价|价税|税额|合计|商户|销售方|购买方|收银|会员|税号|实收|实付|找零|订单|POS)/.test(flat);
+  var docSignal = /(发票|收据|小票|清单|结算|客票|行程单|票价|价税|税额|合计|商户|销售方|购买方|收银|会员|税号|实收|实付|找零|订单|POS|下单|送达|外卖)/.test(flat);
   if (!amount && !dt.exact && !docSignal && !goods) {
     return { ok: false, reason: '这张上面没找到票据信息，换一张更清楚的试试' };
   }
@@ -238,10 +334,21 @@ function parseInvoiceText(text) {
   note = String(note).slice(0, 20);
   var category = invCategory(dense, note, goods, doc.name);
 
+  /* 每个单项单独归类：品名词典 → 页面通用词典 → 整票分类兜底 */
+  for (i2 = 0; i2 < its.length; i2++) {
+    var hit = invCatHit(its[i2].name), inf2 = null;
+    if (!hit) { try { inf2 = infer(its[i2].name, 'expense'); } catch (e) {} }
+    its[i2].category = hit || (inf2 && inf2.type === 'expense' ? inf2.key : '') || category;
+  }
+
   var warnings = [];
   if (!amount) warnings.push('没识别到金额，请手动填写后再入账');
   if (!dt.exact) warnings.push('没识别到日期，已按今天记账');
   if (!seller) warnings.push('没识别到商户名，可手动补充备注');
+  if (its.length >= 2 && amt && Math.abs(amount - itsSum) > 0.02 && Math.abs(amount - itsSumQty) > 0.02) {
+    warnings.push('单项相加（¥' + itsSum + '）与票面合计（¥' + amount + '）不一致，请核对');
+  }
+  if (its.length >= 2 && !amt) warnings.push('票面没有合计，金额按 ' + its.length + ' 个单项相加');
 
   return {
     ok: true,
@@ -256,6 +363,8 @@ function parseInvoiceText(text) {
     seller: seller,
     invoiceNo: invNo,
     goods: goods,
+    items: its,
+    itemsSum: itsSum,
     warnings: warnings,
     raw: raw.slice(0, 400)
   };
@@ -292,10 +401,10 @@ function ocrNormPath(p) {
 
 /* ---------------- 19.4 交互 ---------------- */
 
-var OCR = { step: 'pick', text: '', draft: null, err: '', from: '' };
+var OCR = { step: 'pick', text: '', draft: null, err: '', from: '', pick: {} };
 
 function openOcr() {
-  OCR.step = 'pick'; OCR.text = ''; OCR.draft = null; OCR.err = '';
+  OCR.step = 'pick'; OCR.text = ''; OCR.draft = null; OCR.err = ''; OCR.pick = {};
   window.__ocrDraw = ocrSheet;
   ocrSheet();
 }
@@ -370,6 +479,8 @@ function ocrSheet() {
       <div class="fld"><label>日期</label>
         <input type="date" value="${d.date}" onchange="ocrField('date',this.value)"></div>
 
+      ${ocrItemsHtml(d)}
+
       ${d.warnings.length ? `<div style="margin-top:12px;background:#FFF8F0;border-radius:10px;padding:11px 13px;font-size:11.5px;color:#B06A12;line-height:1.75">
         ${d.warnings.map(esc).join('<br>')}</div>` : ''}
 
@@ -380,8 +491,49 @@ function ocrSheet() {
     </div>
     <div class="sh-f">
       <div class="btn btn-l" style="flex:1" onclick="openOcr()">重拍</div>
-      <div class="btn btn-p" style="flex:2" onclick="ocrConfirm()">确认入账</div>
+      ${ocrFooterBtns(d)}
     </div>`);
+}
+
+/** 确认卡里的单项明细区（≥2 项才出现），勾选 + 金额可改 */
+function ocrItemsHtml(d) {
+  if (!d.items || d.items.length < 2) return '';
+  var sum = 0, rows = '', i;
+  for (i = 0; i < d.items.length; i++) {
+    if (OCR.pick[i] !== false) sum = Math.round((sum + toAmount(d.items[i].amount)) * 100) / 100;
+  }
+  for (i = 0; i < d.items.length; i++) {
+    var it = d.items[i];
+    var on = OCR.pick[i] !== false;
+    var catName = '';
+    try { catName = catOf(d.type, it.category).name; } catch (e) {}
+    rows += `<div style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px dashed #E4E7EE">
+      <span onclick="ocrPick(${i})" style="font-size:17px;line-height:1;color:${on ? '#3D7BFF' : '#C3C9D4'}">${on ? '☑' : '☐'}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(it.name)}${it.qty > 1 ? '<span style="color:var(--sub);font-size:10.5px"> ×' + it.qty + '</span>' : ''}</div>
+        <div style="font-size:10px;color:#98A0AE;margin-top:1px">${esc(catName || '')}</div>
+      </div>
+      <input type="number" inputmode="decimal" value="${it.amount}" oninput="ocrItemAmount(${i},this.value)"
+        style="width:72px;text-align:right;font-size:12.5px;background:#fff;border:1px solid #E4E7EE;border-radius:8px;padding:5px 8px;color:var(--ink)">
+    </div>`;
+  }
+  return `<div style="margin-top:12px;background:#F8F9FC;border-radius:10px;padding:11px 13px">
+    <div style="display:flex;align-items:center;margin-bottom:4px">
+      <div style="font-size:11.5px;color:var(--sub)">识别到 ${d.items.length} 个单项
+        <b style="color:var(--ink)">选中合计 ¥${sum}</b></div>
+      <span onclick="ocrPickAll()" style="margin-left:auto;font-size:11px;color:#3D7BFF">全选 / 清空</span>
+    </div>${rows}</div>`;
+}
+
+/** 底部按钮：有明细时给「按单项入账」，否则普通确认 */
+function ocrFooterBtns(d) {
+  if (!d.items || d.items.length < 2) {
+    return '<div class="btn btn-p" style="flex:2" onclick="ocrConfirm()">确认入账</div>';
+  }
+  var n = 0, i;
+  for (i = 0; i < d.items.length; i++) if (OCR.pick[i] !== false) n++;
+  return `<div class="btn btn-l" style="flex:1;font-size:12.5px" onclick="ocrConfirm()">按合计</div>
+    <div class="btn btn-p" style="flex:2" onclick="ocrConfirmItems()">按单项入账（${n} 笔）</div>`;
 }
 
 /** 拍照 / 选图 → 原生 OCR → 解析 → 进确认卡 */
@@ -390,7 +542,7 @@ function ocrTake(from) {
   if (!cam || !cam.getPhoto || !P || !P.recognize) return toast('此功能需要在 App 内使用');
 
   OCR.from = from;
-  OCR.step = 'busy'; OCR.err = ''; OCR.text = ''; OCR.draft = null;
+  OCR.step = 'busy'; OCR.err = ''; OCR.text = ''; OCR.draft = null; OCR.pick = {};
   ocrSheet();
 
   Promise.resolve(cam.getPhoto({
@@ -445,6 +597,66 @@ function ocrField(k, v) {
   if (!d) return;
   if (k === 'amount') d.amount = toAmount(v);
   else d[k] = v;
+}
+
+/** 明细勾选（undefined 视为选中，省得初始化） */
+function ocrPick(i) {
+  OCR.pick[i] = OCR.pick[i] === false;
+  ocrSheet();
+}
+
+function ocrPickAll() {
+  var d = OCR.draft;
+  if (!d || !d.items) return;
+  var allOn = true, i;
+  for (i = 0; i < d.items.length; i++) if (OCR.pick[i] === false) { allOn = false; break; }
+  for (i = 0; i < d.items.length; i++) OCR.pick[i] = allOn ? false : undefined;
+  ocrSheet();
+}
+
+/** 单项金额只改状态不重渲染，输入不闪 */
+function ocrItemAmount(i, v) {
+  var d = OCR.draft;
+  if (d && d.items && d.items[i]) d.items[i].amount = toAmount(v);
+}
+
+/** 按勾选的单项逐笔记账（一笔一个品名） */
+function ocrConfirmItems() {
+  var d = OCR.draft;
+  if (!d) return;
+  if (!d.items || d.items.length < 2) return ocrConfirm();
+
+  var now = new Date();
+  var date = d.date || dstr(now);
+  var time = date === dstr(now) ? tstr(now) : '12:00';
+  var ts = pdate(date).getTime() + (60 + now.getHours() * 60) * 60000;
+
+  var bills = [], i;
+  for (i = 0; i < d.items.length; i++) {
+    if (OCR.pick[i] === false) continue;
+    var a = toAmount(d.items[i].amount);
+    if (!a || a <= 0) continue;
+    bills.push({
+      _id: uid(),
+      type: d.type,
+      amount: a,
+      category: d.items[i].category || d.category,
+      note: String(d.items[i].name).slice(0, 20),
+      date: date,
+      time: time,
+      ts: ts,
+      source: 'ocr',
+      receipt: d.docName
+    });
+  }
+  if (!bills.length) return toast('请先勾选要入账的单项');
+
+  for (i = bills.length - 1; i >= 0; i--) DB.bills.unshift(bills[i]);
+  save();
+  OCR.draft = null; OCR.text = ''; OCR.pick = {};
+  closeSheet();
+  render();
+  toast('已按单项入账 ' + bills.length + ' 笔');
 }
 
 function ocrConfirm() {
