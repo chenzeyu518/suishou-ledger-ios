@@ -33,17 +33,21 @@ CapacitorHaptics / Cordova 框架与图标、启动图齐全，包内 `public/in
 ledger-ios/
 ├── www/index.html              # 应用本体（正式版：无演示数据、无预览徽标、原生外壳适配）
 ├── native/www/sms-parse.js     # 银行 / 支付短信文本解析（粘贴导入用，随 www 一起注入）
+├── native/www/store-module.js  # 存储加固层：四副本互备 + 自愈 + 存储诊断（与 Android 同一份）
+├── native/www/ux-module.js     # 交互补充层：长按删除 / 删除确认 / 金额清空（与 Android 同一份）
+├── native/ios/LedgerVaultPlugin.swift  # 钥匙串保险柜原生插件（CI 注入到 iOS 工程）
 ├── assets/                     # 应用图标 + 启动图（scripts/make-assets.py 生成）
 ├── capacitor.config.json       # App ID: com.suishou.ledger
 ├── package.json                # Capacitor 6 依赖
 ├── scripts/
 │   ├── build-ipa.sh            # Mac 本地一键构建签名 IPA
-│   ├── patch-ios-plist.sh      # 配置 Info.plist（显示名/浅色界面/竖屏/状态栏）
+│   ├── patch-ios-plist.sh      # 配置 Info.plist（显示名/浅色界面/竖屏/状态栏/文件共享）
 │   ├── make-assets.py          # 重新生成图标与启动图（纯标准库，可自定义配色）
-│   ├── sync-from-preview.js    # 从 H5 预览页同步生成正式版 www/index.html（21 项补丁，逐项断言）
-│   └── test-www.js             # 冒烟测试（46 项断言 + 重启持久化检查）
+│   ├── sync-from-preview.js    # 从 H5 预览页同步生成正式版 www/index.html（25 项补丁，逐项断言）
+│   ├── inject-ios-vault.js     # 把钥匙串插件注入原生工程并登记注册（构建期执行）
+│   └── test-www.js             # 冒烟测试（56 项断言 + 存储副本 / 删除交互 / 重启持久化检查）
 ├── signing/                    # 签名导出配置模板（ad-hoc / development / app-store）
-└── .github/workflows/ios-ipa.yml   # GitHub Actions 云端构建 → 产出 .ipa
+└── .github/workflows/ios-ipa.yml   # GitHub Actions 云端构建 → 产出 .ipa（含插件进包校验）
 ```
 
 > **v1.2.0 能力说明**：iOS 沙箱不允许任何 App 读取短信收件箱或微信的聊天 / 支付数据，
@@ -53,15 +57,25 @@ ledger-ios/
 > （自动跳过提现等「不计收支」行与已退款 / 已关闭交易，商户名自动清洗后归类）。
 > 解析口径与 Android 版的原生短信自动入账保持同源。
 
-> **v1.3.0 数据安全说明（重要）**：账本不再是「只写一份」——原先只存 WebView 的
-> localStorage，属于系统可清理的数据，一旦被清无从找回。现在改为**三副本互备**：
-> ① **系统级存储**（`@capacitor/preferences` → iOS UserDefaults）为主，与 WebView
-> 存储物理隔离，清理 WebView 数据不会波及；② **本机镜像**（localStorage）保证首屏同步读取；
-> ③ **滚动快照**，主存储里保留最近 6 份，防止误清空 / 误导入 / 写入中断。
-> 启动时三处比对，取写入时间戳（rev）最新的一份；主存储与镜像都为空时自动从快照恢复。
-> 导出升级为写入 `Documents` 的 `.json` 文件（配合 `UIFileSharingEnabled`，
-> 「文件」App → 我的 iPhone → 随手记账 里可直接看到并拷出 / 存 iCloud / 发给自己）。
-> 「我的 → 备份与恢复」里可分别从快照、备份文件、粘贴文本三种途径恢复。
+> **v1.4.0 数据安全说明（重要）**：账本不再是「只写一份」——原先只存 WebView 的
+> localStorage，属于系统可清理的数据，一旦被清无从找回。现在改为**四副本互备**：
+> ① **钥匙串保险柜**（原生插件 `LedgerVault`，`SecItem` + `kSecClassGenericPassword`）——
+> iOS 上唯一在「卸载 App / 重新签名安装」之后仍然保留的本地存储，覆盖安装、重装、重签
+> 之后账本会自动长回来；② **系统级存储**（`@capacitor/preferences` → UserDefaults），
+> 与 WebView 存储物理隔离；③ **备份文件**（`Documents/随手记账-自动备份.json`，
+> 配 `UIFileSharingEnabled`，「文件」App → 我的 iPhone → 随手记账 里可见，可拷进 iCloud）；
+> ④ **本机镜像**（localStorage）保证首屏同步读取。另有**滚动快照**（最近 6 份）。
+> 启动时四份比对取写入时间戳（rev）最新的一份，缺失的副本自动补写（自愈）；
+> 四份都空时自动从最近快照恢复。「我的 → 备份与恢复」里能看到四份副本的**实时状态**
+> （各有多少笔、什么时候写的），并可一键「立即同步」或从快照 / 备份文件 / 粘贴文本恢复。
+>
+> 钥匙串副本的实现见 `native/ios/LedgerVaultPlugin.swift`，由
+> `scripts/inject-ios-vault.js` 在 CI 构建时注入（写进 Xcode target 里已存在的
+> `AppDelegate.swift`，并登记到 `capacitor.config.json` 的 `packageClassList`），
+> 构建流水线会校验它确实进了包。
+
+> **v1.4.0 交互补充**：保存成功的提示延长到 9 秒并可直接删除；长按任意一条记录弹出
+> 「编辑 / 删除」菜单，删除前二次确认；数字键盘 ⌫ 长按一次清空金额。见 `native/www/ux-module.js`。
 
 ## 三条路线怎么选
 
