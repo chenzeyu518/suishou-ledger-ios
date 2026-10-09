@@ -17,6 +17,7 @@ on:
     branches: [main]
     paths:
       - "www/**"
+      - "native/**"
       - "assets/**"
       - "capacitor.config.json"
       - "package.json"
