@@ -451,7 +451,50 @@ step('支付宝账单能带出商户与分类（公司后缀已清洗）', () =>
   if (luckin.category !== 'canyin') throw new Error('分类 ' + luckin.category + '，应为 canyin')
 })
 
-/* ---------------- 存储加固层（三副本互备） ---------------- */
+/* ---------------- 记录的删除体验（v1.4.0 交互补充层） ---------------- */
+console.log('\n== 记录的删除体验 ==')
+step('保存后的提示延长到 9 秒，且按钮直接叫「删除」', () => {
+  if (!/}, 9000\);/.test(html)) throw new Error('提示未延长到 9 秒')
+  if (!/已记账：/.test(html)) throw new Error('提示文案缺失')
+  if (!/>删除<\/span>';/.test(html)) throw new Error('提示上的删除按钮缺失')
+})
+step('长按记录弹出「编辑 / 删除」菜单', () => {
+  if (!html.includes('window.openRowMenu')) throw new Error('缺少长按菜单')
+  if (!/openRowMenu\(uxBillIdOf\(row\)\)/.test(html)) throw new Error('长按未接到菜单')
+  if (!/uxFind\(e\.target, 'brow'\)/.test(html)) throw new Error('未按记录行识别长按')
+  if (!/550\)/.test(html)) throw new Error('长按时间阈值缺失')
+})
+step('删除必须二次确认，编辑弹层的删除也走确认', () => {
+  if (!html.includes('window.askDelBill') || !html.includes('confirmDelBill')) throw new Error('缺少删除确认')
+  if (!/delBill = function\(id\)\{ window\.askDelBill\(id\); \}/.test(html)) {
+    throw new Error('编辑弹层的删除未走二次确认')
+  }
+})
+step('长按菜单与删除确认弹层真实可用', () => {
+  const a = boot({})
+  a.api.DB.bills.push({
+    _id: 'x1', type: 'expense', amount: 12, category: 'canyin',
+    note: '测试记录', date: '2026-10-09', time: '12:00', ts: Date.now()
+  })
+  a.sandbox.openRowMenu('x1')
+  if (a.els.sheet._html.indexOf('这笔记录') < 0) throw new Error('长按菜单未渲染')
+  if (a.els.sheet._html.indexOf('删除') < 0) throw new Error('菜单里没有删除入口')
+  a.sandbox.askDelBill('x1')
+  if (a.els.sheet._html.indexOf('确定删除这笔') < 0) throw new Error('未弹出二次确认')
+  if (!a.api.DB.bills.some((b) => b._id === 'x1')) throw new Error('确认前就被删除了')
+  a.sandbox.confirmDelBill('x1')
+  if (a.api.DB.bills.some((b) => b._id === 'x1')) throw new Error('确认后仍未删除')
+})
+step('数字键盘 ⌫ 长按可一次清空金额', () => {
+  if (!/closest\('\.key\[data-key="del"\]'\)/.test(html)) throw new Error('键盘长按清空缺失')
+  if (!/S\.buf = '0'/.test(html)) throw new Error('清空逻辑缺失')
+})
+step('列表里注入「长按可编辑或删除」提示', () => {
+  if (!html.includes('window.uxDecorate')) throw new Error('提示注入函数缺失')
+  if (!/长按任一记录，可编辑或删除/.test(html)) throw new Error('提示文案缺失')
+})
+
+/* ---------------- 存储加固层（四副本互备） ---------------- */
 function mockPrefs(seed) {
   const m = Object.assign({}, seed || {})
   return {
@@ -469,6 +512,16 @@ const mockFs = {
   readdir() { return Promise.resolve({ files: [] }) }
 }
 const mockShare = { share() { return Promise.resolve() } }
+/* 钥匙串保险柜桩：模拟 iOS LedgerVault 原生插件 */
+function mockVault(seed) {
+  const m = { v: seed || '' }
+  return {
+    _m: m,
+    readVault() { return Promise.resolve({ value: m.v || '' }) },
+    writeVault(o) { m.v = String(o.value); return Promise.resolve({ ok: true }) },
+    clearVault() { m.v = ''; return Promise.resolve({ ok: true }) }
+  }
+}
 function payload(rev, n, tag) {
   return JSON.stringify({
     app: '随手记账', v: 1, rev,
@@ -491,7 +544,58 @@ async function asteP(name, fn) {
 }
 
 ;(async () => {
-  console.log('\n== 存储加固层（三副本互备）==')
+  console.log('\n== 存储加固层（四副本互备）==')
+
+  await asteP('钥匙串保险柜：卸载重装后账本自动恢复（最强副本）', async () => {
+    const vault = mockVault(payload(6000, 9, 'kv'))
+    const a = boot({}, { LedgerVault: vault })   // 全新安装：镜像 / 主存储 / 文件全空
+    if (a.api.DB.bills.length !== 0) throw new Error('前置条件错误：新装机应为空账本')
+    await a.sandbox.storeSync()
+    if (a.api.DB.bills.length !== 9) throw new Error('未从钥匙串恢复，实际 ' + a.api.DB.bills.length + ' 笔')
+    if (!a.api.DB.bills.some((b) => b.note === 'kv0')) throw new Error('恢复的数据不对')
+  })
+
+  await asteP('副本缺失时启动自动补齐（自愈：钥匙串被清也能补回）', async () => {
+    const st = {}
+    st['ledger_h5_v1'] = payload(8000, 4, 'heal')
+    const vault = mockVault('')
+    const a = boot(st, { LedgerVault: vault })
+    await a.sandbox.storeSync()
+    if (a.api.DB.bills.length !== 4) throw new Error('镜像数据丢失')
+    if (!vault._m.v) throw new Error('钥匙串副本未自动补写')
+    if (JSON.parse(vault._m.v).bills.length !== 4) throw new Error('补写内容不对')
+  })
+
+  await asteP('保存时同时写入钥匙串与文档目录副本', async () => {
+    const prefs = mockPrefs({})
+    const vault = mockVault('')
+    const fs2 = {
+      _w: {},
+      writeFile(o) { fs2._w[o.path] = o.data; return Promise.resolve({ uri: 'file:///docs/' + o.path }) },
+      readFile() { return Promise.resolve({ data: null }) },
+      readdir() { return Promise.resolve({ files: [] }) }
+    }
+    const a = boot({}, { Preferences: prefs, LedgerVault: vault, Filesystem: fs2 })
+    a.sandbox.Capacitor.getPlatform = () => 'ios'
+    ;['1', '9', '.', '9'].forEach((k) => a.sandbox.onKey(k))
+    a.sandbox.onNote('地铁')
+    a.sandbox.saveBill()
+    if (!vault._m.v) throw new Error('钥匙串副本未写入')
+    if (JSON.parse(vault._m.v).bills.length !== 1) throw new Error('钥匙串内容不对')
+    if (!fs2._w['随手记账-自动备份.json']) throw new Error('文档目录常驻副本未写入')
+  })
+
+  await asteP('存储诊断能列出四份副本的实时状态', async () => {
+    const prefs = mockPrefs({ ledger_native_v1: payload(9000, 3, 'dg') })
+    const vault = mockVault(payload(9001, 3, 'kv'))
+    const a = boot({}, { Preferences: prefs, LedgerVault: vault })
+    const rows = await a.sandbox.storeDiag()
+    if (rows.length !== 4) throw new Error('诊断项数 ' + rows.length + '（应为 4）')
+    const kv = rows.filter((r) => r.k === 'vault')[0]
+    if (!kv || kv.count !== 3) throw new Error('钥匙串副本未被统计')
+    const names = rows.map((r) => r.name).join('/')
+    if (names.indexOf('钥匙串') < 0 || names.indexOf('系统级存储') < 0) throw new Error('诊断名称缺失：' + names)
+  })
 
   await asteP('首次升级：旧镜像数据自动搬进系统级主存储', async () => {
     const prefs = mockPrefs({})
