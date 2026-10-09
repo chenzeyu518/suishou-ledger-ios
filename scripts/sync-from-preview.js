@@ -5,7 +5,16 @@
  * 本脚本负责把「预览版」差异替换为「正式版」差异，每一项替换都做断言，
  * 预览页结构变化导致任何一项匹配失败时立即报错退出，不会悄悄产出错误结果。
  *
- * v1.3.0 起数据存储加固（与 Android 版同一份 native/www/store-module.js）：
+ * v1.4.0 起数据存储升级为「四副本互备」（与 Android 版同一份 native/www/store-module.js）：
+ *   - 钥匙串保险柜（原生插件 LedgerVault）+ 系统级存储（UserDefaults）+ 文档文件 + 本机镜像
+ *   - 启动取 rev 最新的一份，缺失副本自动补写（自愈）；四份都空时从最近快照恢复
+ *   - 「我的 → 备份与恢复」里可看到四份副本的实时状态
+ * v1.4.0 起交互补充层（native/www/ux-module.js）：
+ *   - 保存成功的提示延长到 9 秒并可直接删除
+ *   - 长按任意记录弹出「编辑 / 删除」，删除前二次确认
+ *   - 数字键盘 ⌫ 长按一次清空金额
+ *
+ * v1.3.0 起数据存储加固（初版三副本）：
  *   - Preferences 系统级存储为主 + localStorage 镜像 + 滚动快照，三副本互备
  *   - 启动时取 rev（写入时间戳）最新的一份；主存储为空时自动从快照恢复
  *   - 导出升级为写入 Documents 的 .json 文件，可进「文件」App / iCloud / 发给别人
@@ -101,7 +110,7 @@ function doLoadDemo(){
 )
 
 /* ---------------- 6. 版本与页脚文案 ---------------- */
-patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.3.0</span>`)
+patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.4.0</span>`)
 patch(
   'footer',
   `本页为小程序交互预览，数据仅存于本机浏览器`,
@@ -152,7 +161,7 @@ patch(
 patch(
   'mine-restore-sub',
   `<div class="bd"><div class="t">从剪贴板恢复</div><div class="s">换设备时把备份文本粘贴回来</div></div>`,
-  `<div class="bd"><div class="t">备份与恢复</div><div class="s">快照 / 备份文件 / 粘贴文本，三种方式</div></div>`
+  `<div class="bd"><div class="t">备份与恢复</div><div class="s">四份副本 + 快照，卸载重装也能找回</div></div>`
 )
 
 /* ---------------- 7. 原理说明：贴合 iOS 独立 App 的真实情况 ---------------- */
@@ -204,7 +213,15 @@ patch('sms-parse', `</script>\n</body>`, smsCode + `\n</script>\n</body>`)
 const storePath = path.join(root, 'native', 'www', 'store-module.js')
 if (!fs.existsSync(storePath)) throw new Error('缺少 native/www/store-module.js')
 const storeCode = fs.readFileSync(storePath, 'utf8')
+if (/<\/script/i.test(storeCode)) throw new Error('store-module.js 里出现 </script>，会截断注入')
 patch('store-module', `</script>\n</body>`, storeCode + `\n</script>\n</body>`)
+
+/* ---------------- 11. 交互补充层（整段注入：记录的删除 / 长按菜单 / 金额清空） ---------------- */
+const uxPath = path.join(root, 'native', 'www', 'ux-module.js')
+if (!fs.existsSync(uxPath)) throw new Error('缺少 native/www/ux-module.js')
+const uxCode = fs.readFileSync(uxPath, 'utf8')
+if (/<\/script/i.test(uxCode)) throw new Error('ux-module.js 里出现 </script>，会截断注入')
+patch('ux-module', `</script>\n</body>`, uxCode + `\n</script>\n</body>`)
 
 const out = path.join(root, 'www', 'index.html')
 fs.writeFileSync(out, html)
@@ -224,7 +241,14 @@ if (!/不计收支/.test(html)) throw new Error('自检失败：官方账单「�
 if (!/短信 \/ 微信 \/ 支付宝账单/.test(html)) throw new Error('自检失败：导入入口副标题未更新')
 if (!/storeSync/.test(html) || !/ledger_native_v1/.test(html)) throw new Error('自检失败：存储加固层未注入')
 if (!/storeRestore/.test(html)) throw new Error('自检失败：快照兜底恢复逻辑缺失')
+if (!/readVault/.test(html) || !/writeVault/.test(html)) throw new Error('自检失败：钥匙串保险柜副本缺失')
+if (!/随手记账-自动备份\.json/.test(html)) throw new Error('自检失败：文档目录常驻副本缺失')
+if (!/storeRenderDiag/.test(html)) throw new Error('自检失败：存储状态诊断缺失')
+if (!/window\.openRowMenu/.test(html) || !/window\.askDelBill/.test(html)) throw new Error('自检失败：长按记录操作菜单缺失')
+if (!/confirmDelBill/.test(html) || !/uxDecorate/.test(html)) throw new Error('自检失败：删除确认或列表提示缺失')
+if (html.indexOf('function storePack') > html.indexOf('function uxOn')) throw new Error('自检失败：存储层必须在交互层之前注入')
 if (!/导出备份为文件/.test(html)) throw new Error('自检失败：备份入口文案未更新')
+if (html.indexOf('function storePack') < 0) throw new Error('自检失败：存储层缺失')
 if (/sms-parse/.test(html)) throw new Error('自检失败：源码注释未清理')
 
 console.log('已生成正式版：%s（%d KB）', out, Math.round(html.length / 1024))
