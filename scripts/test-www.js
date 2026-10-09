@@ -480,6 +480,34 @@ const HOTEL_TEXT = [
   '价税合计（大写）肆佰零贰圆捌角整 （小写）¥402.80'
 ].join('\n')
 
+const MEITUAN_TEXT = [
+  '美团外卖 #32',
+  '稻香菜馆',
+  '即送达',
+  '下单时间: 10-09 17:59',
+  '备注',
+  '顾客需要餐具;',
+  '1号口袋',
+  '米饭 【*2】 4.0',
+  '丝瓜炒鸡蛋（小份） *1 12.0',
+  '青椒炒土豆丝 *1 16.0',
+  '蒜苔炒肉丝（小份） *1 15.8',
+  '合计: 【*5】',
+  '顾客',
+  '陈先生',
+  '[门店新客]',
+  '手机尾号6128',
+  '虚拟号码:15784904027 转 5088',
+  '备用号码1: 18168467257 转 5642',
+  '顾客地址:新华园-3号楼(***)',
+  'ID:M2002336754275820213',
+  '出餐宝请扫本条形码出餐',
+  '#32完'
+].join('\n')
+
+const MART_TEXT = ['惠民超市', '2026-10-08', '可乐 3.50', '牛奶 *2 9.60', '面包 8.00', '合计 21.10', '现金 50.00', '找零 28.90'].join('\n')
+const UNIT_TEXT = ['好又多', '2026-10-07', '洗衣液 *2 19.90', '纸巾 *1 6.50', '合计 46.30'].join('\n')
+
 step('增值税发票：金额取「价税合计（小写）」而不是不含税合计', () => {
   const d = api.parseInvoiceText(VAT_TEXT)
   if (!d.ok) throw new Error('未识别：' + d.reason)
@@ -526,6 +554,32 @@ step('识别不到金额时不判失败，而是给出手填提醒', () => {
   if (!d.ok) throw new Error('应进入确认卡让用户补金额：' + d.reason)
   if (d.amount !== 0) throw new Error('金额应为 0，实际 ' + d.amount)
   if (d.warnings.join('').indexOf('金额') < 0) throw new Error('缺少金额提醒')
+})
+step('外卖小票逐单项拆分：美团单（合计被裁掉）', () => {
+  const d = api.parseInvoiceText(MEITUAN_TEXT)
+  if (!d.ok) throw new Error('未识别：' + d.reason)
+  if (d.docName !== '外卖小票') throw new Error('票种错误：' + d.docName)
+  if (d.amount !== 47.8) throw new Error('金额应取单项之和 47.8，实际 ' + d.amount)
+  if (d.items.length !== 4) throw new Error('应识别 4 个单项，实际 ' + d.items.length)
+  if (d.items[0].name !== '米饭' || d.items[0].qty !== 2 || d.items[0].amount !== 4) throw new Error('米饭单项错误：' + JSON.stringify(d.items[0]))
+  if (d.items[1].name !== '丝瓜炒鸡蛋（小份）' || d.items[1].amount !== 12) throw new Error('「*1 12.0」粘行拆分错误：' + JSON.stringify(d.items[1]))
+  if (d.items[3].amount !== 15.8) throw new Error('蒜苔炒肉丝金额错误：' + JSON.stringify(d.items[3]))
+  if (d.dateGuessed) throw new Error('应从「下单时间:10-09」取到日期，实际按今天猜的：' + d.date)
+  if (d.category !== 'canyin') throw new Error('分类错误：' + d.category)
+  if (d.items.some(x => /合计|尾号|号码|ID|美团|陈先生|出餐/.test(x.name))) throw new Error('票头票脚混进了单项：' + d.items.map(x => x.name).join(','))
+  if (d.items.every(x => x.category !== 'canyin')) throw new Error('单项分类未兜底到整票分类')
+})
+step('超市小票单项：合计存在时口径校验一致', () => {
+  const d = api.parseInvoiceText(MART_TEXT)
+  if (d.amount !== 21.1) throw new Error('合计应为 21.1，实际 ' + d.amount)
+  if (d.items.length !== 3) throw new Error('应识别 3 个单项，实际 ' + d.items.length)
+  if (d.warnings.join('').indexOf('不一致') >= 0) throw new Error('口径一致却报了不一致')
+})
+step('行尾数字是单价时按「合计=单价×数量」自动乘回', () => {
+  const d = api.parseInvoiceText(UNIT_TEXT)
+  if (d.amount !== 46.3) throw new Error('合计应为 46.3，实际 ' + d.amount)
+  if (d.items[0].amount !== 39.8) throw new Error('洗衣液应乘回 39.8，实际 ' + d.items[0].amount)
+  if (d.warnings.join('').indexOf('不一致') >= 0) throw new Error('单价口径已乘回，不该再警告')
 })
 step('首页「拍票入账」入口与识别模块都在正式版里', () => {
   sandbox.switchTab('index')
