@@ -32,6 +32,13 @@ check('首次启动不注入演示数据', !/return \{ bills: seed\(\)/.test(htm
 check('含原生外壳适配', html.includes('nativeShell') && html.includes('Capacitor'))
 check('含数据持久化', html.includes('localStorage.setItem'))
 check('演示数据为按需载入', html.includes('doLoadDemo'))
+check('含常驻数字键盘元素', html.includes('<div class="keypad" id="keypad"></div>'))
+check(
+  '按键序列与小程序端一致',
+  html.includes(`const KEYS = ['1','2','3','4','5','6','7','8','9','.','0','del']`)
+)
+check('完成按钮已绑定到 saveBill', html.includes('onclick="saveBill()"'))
+check('键盘渲染已接入 render()', /renderTabbar\(\);\s*\n\s*renderKeypad\(\);/.test(html))
 
 /* ---------------- 最小 DOM 桩 ---------------- */
 const noop = () => {}
@@ -44,11 +51,16 @@ function fakeEl(id) {
     _html: '',
     _text: '',
     value: '',
-    style: new Proxy({}, { get: () => '', set: () => true }),
+    style: new Proxy(
+      {},
+      { get: (t, k) => (k in t ? t[k] : ''), set: (t, k, v) => { t[k] = v; return true } }
+    ),
     dataset: {},
     classList: { add: noop, remove: noop, toggle: noop, contains: () => false },
     clientWidth: 320,
     clientHeight: 220,
+    offsetHeight: 203, // 数字键盘实测高度（4 行 44px + 间隙 + 内边距）
+    offsetWidth: 375,
     width: 0,
     height: 0,
     getContext: () => ctxStub,
@@ -79,13 +91,22 @@ function fakeEl(id) {
 
 function boot(store) {
   const els = {}
+  const cssVars = {}
   const document = {
     getElementById: (id) => (els[id] = els[id] || fakeEl(id)),
     querySelector: () => null,
     querySelectorAll: () => [],
     createElement: () => fakeEl('tmp'),
     body: { appendChild: noop },
-    execCommand: () => true
+    execCommand: () => true,
+    documentElement: {
+      style: {
+        setProperty: (k, v) => {
+          cssVars[k] = v
+        },
+        getPropertyValue: (k) => cssVars[k] || ''
+      }
+    }
   }
   const sandbox = {
     console,
@@ -126,7 +147,7 @@ function boot(store) {
     'globalThis.__api = { get S(){return S}, get DB(){return DB}, get store(){return localStorage}, dstr, catchUp, parseText, quickTpl, seed };',
     sandbox
   )
-  return { sandbox, els, api: sandbox.__api }
+  return { sandbox, els, api: sandbox.__api, cssVars }
 }
 
 /* ---------------- 第一次启动：空账本 ---------------- */
@@ -147,7 +168,7 @@ try {
   console.error('✗ 加载阶段报错：', e.stack)
   process.exit(1)
 }
-const { sandbox, els, api } = app
+const { sandbox, els, api, cssVars } = app
 
 function step(name, fn) {
   try {
@@ -165,6 +186,31 @@ step('空账本空态渲染', () => {
 })
 step('localStorage 为空（无演示数据）', () => {
   if (store['ledger_h5_v1']) throw new Error('启动即写入了数据')
+})
+
+console.log('\n== 数字键盘（记账入口）==')
+const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del']
+step('首页渲染 12 键 + 完成按钮', () => {
+  const h = els.keypad._html
+  if (!h) throw new Error('键盘未渲染')
+  KEYS.forEach((k) => {
+    if (!h.includes(`data-key="${k}"`)) throw new Error('缺少按键 ' + k)
+    if (!h.includes(`onclick="onKey('${k}')"`)) throw new Error('按键未绑定 onKey: ' + k)
+  })
+  if (!h.includes('⌫')) throw new Error('删除键未显示为 ⌫')
+  if (!h.includes('onclick="saveBill()"')) throw new Error('完成按钮未绑定保存')
+  if (!h.includes('完成')) throw new Error('完成按钮文案缺失')
+})
+step('首页键盘可见且高度写入 --kp-h', () => {
+  if (els.keypad.style.display !== 'flex') throw new Error('首页键盘未显示')
+  if (cssVars['--kp-h'] !== '203px') throw new Error('--kp-h 异常: ' + cssVars['--kp-h'])
+})
+step('切到其它 Tab 键盘隐藏，回到首页恢复', () => {
+  sandbox.switchTab('bill')
+  if (els.keypad.style.display !== 'none') throw new Error('明细页键盘未隐藏')
+  if (cssVars['--kp-h'] !== '0px') throw new Error('隐藏后 --kp-h 未归零')
+  sandbox.switchTab('index')
+  if (els.keypad.style.display !== 'flex') throw new Error('返回首页键盘未恢复')
 })
 
 console.log('\n== 记账流程 ==')

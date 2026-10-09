@@ -19,8 +19,11 @@ set_key() { # set_key <键名> <类型> <值>
 }
 
 set_key CFBundleDisplayName string "随手记账"
-set_key CFBundleShortVersionString string "1.0.0"
-set_key CFBundleVersion string "1"
+# 版本号与 package.json 保持一致；构建号优先取 CI 运行号（每次构建递增），本地回退为 1
+APP_VERSION="$(node -p "require('./package.json').version" 2>/dev/null || echo "1.1.0")"
+BUILD_NUMBER="${GITHUB_RUN_NUMBER:-1}"
+set_key CFBundleShortVersionString string "$APP_VERSION"
+set_key CFBundleVersion string "$BUILD_NUMBER"
 set_key UIUserInterfaceStyle string "Light"
 set_key UIStatusBarStyle string "UIStatusBarStyleDarkContent"
 set_key UIViewControllerBasedStatusBarAppearance bool false

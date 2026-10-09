@@ -19,8 +19,8 @@
     --safe-b: env(safe-area-inset-bottom, 0px);
   }
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{height:100%;overscroll-behavior:none}
-  body{-webkit-font-smoothing:antialiased;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  html,body{height:100%;max-width:100%;overflow-x:hidden;overscroll-behavior:none}
+  body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   input,textarea{-webkit-user-select:text;user-select:text}
   body{
     font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
@@ -28,6 +28,7 @@
     -webkit-font-smoothing:antialiased;
     overscroll-behavior-y:contain;
   }
+  #app{max-width:100%}
   input,button,textarea{font-family:inherit;border:none;outline:none;background:none;color:inherit;font-size:inherit}
   .num{font-family:"SF Mono","DIN Alternate",-apple-system,sans-serif;font-variant-numeric:tabular-nums;letter-spacing:-.3px;font-weight:600}
   .t-expense{color:var(--expense)} .t-income{color:var(--income)} .sub{color:var(--sub)}
@@ -140,13 +141,14 @@
   .sg{display:flex;align-items:center;gap:5px;margin-top:8px;background:#F2F7FF;border-radius:7px;padding:7px 9px;font-size:11.5px;color:#4C6FFF}
   .sg .u{margin-left:auto;color:var(--sub)}
 
-  .keypad{flex:0 0 auto;display:flex;gap:5px;padding:6px 8px 8px;background:#EEF0F6;border-top:1px solid #E4E7EF;padding-bottom:calc(8px + var(--safe-b))}
+  /* 常驻数字键盘：作为 #app 的 flex 子项，固定在 TabBar 之上，不随内容滚动 */
+  .keypad{flex:0 0 auto;display:flex;gap:5px;padding:6px 8px 8px;background:#EEF0F6;border-top:1px solid #E4E7EF}
   .kk{flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
   .key{height:44px;background:#fff;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:19px;font-family:"SF Mono",-apple-system,sans-serif;font-weight:500}
   .key:active{background:#E6E9F2}
   .ok{width:84px;border-radius:10px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600}
 
-  .undo{position:fixed;left:16px;right:16px;bottom:calc(54px + var(--safe-b) + 8px);z-index:60;display:flex;align-items:center;gap:6px;background:rgba(26,29,38,.92);border-radius:12px;padding:11px 13px;animation:up .22s}
+  .undo{position:fixed;left:16px;right:16px;bottom:calc(54px + var(--safe-b) + var(--kp-h,0px) + 8px);z-index:60;display:flex;align-items:center;gap:6px;background:rgba(26,29,38,.92);border-radius:12px;padding:11px 13px;animation:up .22s}
   @keyframes up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
   .undo .txt{flex:1;color:#fff;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .undo .b{color:#8FB0FF;font-size:13px;font-weight:600}
@@ -266,6 +268,7 @@
 <div id="app">
   <header class="nav"><h1 id="navTitle">随手记账</h1></header>
   <main id="main"></main>
+  <div class="keypad" id="keypad"></div>
   <nav class="tabbar" id="tabbar"></nav>
 </div>
 <div class="mask" id="mask"></div>
@@ -670,7 +673,7 @@ function renderIndex(){
   const inf = S.note ? infer(S.note, S.type) : null;
 
   main.innerHTML = `
-  <div class="pad">
+  <div class="pad pad-kp">
     <div class="hero">
       <div class="hero-top" style="position:relative">${mlabel(mk)}<em>▾</em>
         <input type="month" value="${mk}" onchange="pickMonth(this.value)" style="position:absolute;inset:0;width:100%;height:100%;opacity:0">
@@ -1140,7 +1143,7 @@ function renderMine(){
         <span class="ar">›</span>
       </div>
       <div class="mi"><div class="ic" style="background:#F4F5F9">🏷️</div>
-        <div class="bd"><div class="t">版本</div></div><span class="val">v1.0.0</span></div>
+        <div class="bd"><div class="t">版本</div></div><span class="val">v1.1.0</span></div>
     </div>
     <div style="text-align:center;font-size:10.5px;color:#B9BFCC;padding:22px 0 6px">所有数据仅保存在本机，不会上传任何服务器</div>
   </div>`;
@@ -1486,6 +1489,23 @@ function openBudget(){
 }
 
 /* ---------------------- 16. 渲染入口 ---------------------- */
+/* 数字键盘的按键序列（与小程序端 KEYS 完全一致） */
+const KEYS = ['1','2','3','4','5','6','7','8','9','.','0','del'];
+
+/**
+ * 常驻数字键盘：只在「记账」页显示，切到其它 Tab 时隐藏。
+ * 键盘高度写进 CSS 变量 --kp-h，撤销条等浮层据此让位。
+ */
+function renderKeypad(){
+  const kp = $('keypad');
+  const on = S.tab === 'index';
+  kp.innerHTML = `<div class="kk">${KEYS.map(k =>
+    `<div class="key" data-key="${k}" onclick="onKey('${k}')">${k === 'del' ? '⌫' : k}</div>`).join('')}</div>`
+    + `<div class="ok" onclick="saveBill()">完成</div>`;
+  kp.style.display = on ? 'flex' : 'none';
+  document.documentElement.style.setProperty('--kp-h', (on ? kp.offsetHeight : 0) + 'px');
+}
+
 function render(){
   $('navTitle').textContent = TABS.find(t => t.key === S.tab).name;
   if (S.tab === 'index') renderIndex();
@@ -1493,6 +1513,7 @@ function render(){
   else if (S.tab === 'stats') renderStats();
   else renderMine();
   renderTabbar();
+  renderKeypad();
 }
 
 /* 启动 */

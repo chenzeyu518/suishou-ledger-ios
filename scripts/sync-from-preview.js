@@ -44,8 +44,8 @@ patch(
 /* ---------------- 2. CSS：原生 App 手感 ---------------- */
 patch(
   'css-native',
-  `  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}\n  html,body{height:100%}`,
-  `  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}\n  html,body{height:100%;overscroll-behavior:none}\n  body{-webkit-font-smoothing:antialiased;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}\n  input,textarea{-webkit-user-select:text;user-select:text}`
+  `  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}\n  html,body{height:100%;max-width:100%;overflow-x:hidden}`,
+  `  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}\n  html,body{height:100%;max-width:100%;overflow-x:hidden;overscroll-behavior:none}\n  body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}\n  input,textarea{-webkit-user-select:text;user-select:text}`
 )
 
 /* ---------------- 3. 顶部导航：去掉预览徽标 ---------------- */
@@ -91,7 +91,7 @@ function doLoadDemo(){
 )
 
 /* ---------------- 6. 版本与页脚文案 ---------------- */
-patch('version', `<span class="val">v1.0.0 预览版</span>`, `<span class="val">v1.0.0</span>`)
+patch('version', `<span class="val">v1.1.0 预览版</span>`, `<span class="val">v1.1.0</span>`)
 patch(
   'footer',
   `本页为小程序交互预览，数据仅存于本机浏览器`,
@@ -135,6 +135,8 @@ if (/<span class="badge"/.test(html)) throw new Error('自检失败：预览徽�
 if (/total: 8000/.test(html)) throw new Error('自检失败：演示默认预算仍存在')
 if (/bills: seed\(\)/.test(html)) throw new Error('自检失败：演示数据仍为默认注入')
 if (!/doLoadDemo/.test(html) || !/nativeShell/.test(html)) throw new Error('自检失败：新函数缺失')
+if (!/id="keypad"/.test(html)) throw new Error('自检失败：数字键盘缺失（单项花费输入项）')
+if (!/class="ok" onclick="saveBill\(\)"/.test(html)) throw new Error('自检失败：完成按钮缺失')
 
 console.log('已生成正式版：%s（%d KB）', out, Math.round(html.length / 1024))
 console.log('应用的补丁：')
