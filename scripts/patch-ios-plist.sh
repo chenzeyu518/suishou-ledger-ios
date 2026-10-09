@@ -29,9 +29,13 @@ set_key UIStatusBarStyle string "UIStatusBarStyleDarkContent"
 set_key UIViewControllerBasedStatusBarAppearance bool false
 set_key ITSAppUsesNonExemptEncryption bool false
 
+# 让「文件」App 能看到 App 的 Documents 目录（备份文件放这里，用户可自行拷出/存 iCloud）
+set_key UIFileSharingEnabled bool true
+set_key LSSupportsOpeningDocumentsInPlace bool true
+
 # 仅竖屏
 "$PB" -c "Delete :UISupportedInterfaceOrientations" "$PLIST" 2>/dev/null || true
 "$PB" -c "Add :UISupportedInterfaceOrientations array" "$PLIST"
 "$PB" -c "Add :UISupportedInterfaceOrientations:0 string UIInterfaceOrientationPortrait" "$PLIST"
 
-echo "✓ Info.plist 已配置（显示名 / 浅色界面 / 深色状态栏文字 / 竖屏）"
+echo "✓ Info.plist 已配置（显示名 / 浅色界面 / 深色状态栏文字 / 竖屏 / 文件共享）"
